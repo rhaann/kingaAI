@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
-
+import { AuthProvider } from "@/context/authContext"; 
+import { GoogleDriveProvider } from "@/context/googleDriveContext"; 
 
 
 export const metadata: Metadata = {
@@ -16,7 +17,11 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="h-full text-white">
-        {children}
+        <AuthProvider> 
+          <GoogleDriveProvider> 
+              {children}
+          </GoogleDriveProvider>
+        </AuthProvider> 
       </body>
     </html>
   );
