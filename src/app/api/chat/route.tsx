@@ -1,59 +1,83 @@
-// src/app/api/chat/route.ts
-
-import { sendMessage } from "@/services/sendMessage"; // <-- 1. Import our new service
-import { generateSmartTitle } from "@/lib/smartTitles";
-import { smartShouldCreateArtifact } from "@/lib/smartArtifacts";
-import { ModelConfig } from "@/types/types";
-import { AVAILABLE_MODELS } from "@/config/modelConfig"; // Import available models for a default
+import { sendMessage } from "@/services/sendMessage";
+import { ModelConfig, LLMResult } from "@/types/types";
+import { AVAILABLE_MODELS } from "@/config/modelConfig";
 
 export async function POST(req: Request) {
   try {
-    // Get all the data from the client's request
-    const { message, modelConfig, conversationHistory, documentContext } = await req.json();
+    const body = await req.json();
+    const { message, modelConfig, conversationHistory, documentContext, currentArtifactId, currentArtifactTitle } = body;
 
-    // --- 2. VALIDATE AND PREPARE DATA ---
     if (!message) {
       return new Response("Message is required", { status: 400 });
     }
 
-    // Provide a default model if the client doesn't send one
-    const selectedModelConfig: ModelConfig = modelConfig || AVAILABLE_MODELS[3]; // Default to Gemini Flash
+    const selectedModelConfig: ModelConfig = modelConfig && modelConfig.provider 
+      ? modelConfig 
+      : AVAILABLE_MODELS[2];
 
-    // --- 3. CALL THE NEW sendMessage SERVICE ---
-    // We now pass a single options object. The sessionId is no longer needed by this service.
-    const result = await sendMessage(message, {
+    const result: LLMResult = await sendMessage(message, {
       modelConfig: selectedModelConfig,
       conversationHistory,
       documentContext,
     });
     
-    const aiResponse = result.output;
-
-    // --- 4. HANDLE ARTIFACT CREATION (No change here) ---
-    if (!aiResponse) {
-      return Response.json({ result: { output: "I'm sorry, I couldn't generate a response." } });
-    }
-    
-    const artifactDecision = smartShouldCreateArtifact(message, aiResponse);
-    
-    if (artifactDecision.shouldCreate) {
-      return Response.json({
-        result: {
-          output: `I've created the document for you: "${artifactDecision.title}"`,
-          artifact: {
-            id: `artifact-${Date.now()}`,
-            title: artifactDecision.title, // Use the smarter title
-            content: aiResponse,
-            type: 'document'
-          }
+    switch (result.type) {
+      case 'tool_call':
+        if (result.toolName === 'create_document') {
+          const { title, content } = result.toolArgs;
+          return Response.json({
+            result: {
+              output: `I've created a document for you: "${title}"`,
+              artifact: {
+                id: `artifact-${Date.now()}`,
+                title: title,
+                type: 'document',
+                // Create the first version
+                versions: [{ content: content, createdAt: Date.now() }],
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              }
+            }
+          });
         }
-      });
+        
+        if (result.toolName === 'update_document') {
+          if (!currentArtifactId || !currentArtifactTitle) {
+            throw new Error("Attempted to update a document, but no current artifact ID or title was provided.");
+          }
+          const { content } = result.toolArgs;
+          
+          // --- THIS IS THE FIX ---
+          // We now construct a partial artifact object that includes the new version.
+          // Our useChats hook will know how to merge this.
+          return Response.json({
+            result: {
+              output: `I've updated the document for you.`,
+              artifact: {
+                id: currentArtifactId,
+                title: currentArtifactTitle,
+                type: 'document',
+                // The hook only needs the LATEST version to push onto the history.
+                versions: [{ content: content, createdAt: Date.now() }],
+                updatedAt: Date.now(),
+              }
+            }
+          });
+        }
+        throw new Error(`Unknown tool name: ${result.toolName}`);
+
+      case 'text':
+      default:
+        const aiResponse = result.content || "I'm sorry, I couldn't generate a response.";
+        return Response.json({
+          result: {
+            output: aiResponse
+          }
+        });
     }
-    
-    return Response.json({ result });
 
   } catch (err: any) {
-    console.error("Error in /api/chat:", err);
+    console.error("Error in /api/chat:", err.stack || err);
     return new Response(err.message || "An unknown error occurred", { status: 500 });
   }
 }

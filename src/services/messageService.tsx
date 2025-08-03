@@ -33,11 +33,11 @@ class MessageService {
     options?: SendMessageOptions
   ) {
     switch (modelConfig.provider) {
-      case 'openai':
+      case 'OpenAI':
         return this.sendOpenAIMessage(message, modelConfig, options);
-      case 'google':
+      case 'Google':
         return this.sendGeminiMessage(message, modelConfig, options);
-      case 'anthropic':
+      case 'Anthropic':
         throw new Error('Anthropic support coming soon!');
       default:
         throw new Error(`Unsupported provider: ${modelConfig.provider}`);
@@ -158,7 +158,7 @@ export async function sendMessage(
   const defaultModel: ModelConfig = {
     id: 'gemini-flash',
     name: 'Gemini Flash',
-    provider: 'google',
+    provider: 'Google',
     model: 'gemini-1.5-flash',
   };
 

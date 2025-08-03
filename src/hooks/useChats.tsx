@@ -47,7 +47,12 @@ export const useChats = () => {
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const userChats = querySnapshot.docs.map(doc => {
         const data = doc.data();
-        return convertTimestamps({ ...data, id: doc.id }) as Chat;
+        // Ensure artifacts array exists and is properly typed
+        const artifacts = (data.artifacts || []).map((art: any) => ({
+          ...art,
+          versions: art.versions || [{ content: art.content, createdAt: art.createdAt }]
+        }));
+        return convertTimestamps({ ...data, id: doc.id, artifacts }) as Chat;
       });
       setChats(userChats);
       setLoading(false);
@@ -64,19 +69,9 @@ export const useChats = () => {
   const createNewChat = useCallback(async (modelConfig?: ModelConfig): Promise<string> => {
     if (!user) throw new Error("User not authenticated");
 
-    const fallbackModel = {
-      id: 'gemini-1.5-flash',
-      name: 'Gemini Flash',
-      provider: 'Google'
-    };
-
-    const selectedModel = modelConfig || AVAILABLE_MODELS?.[3] || fallbackModel;
-
-    const plainModelConfig = {
-      id: selectedModel.id,
-      name: selectedModel.name,
-      provider: selectedModel.provider,
-    };
+    const fallbackModel = { id: 'gemini-1.5-flash-latest', name: 'Gemini Flash', provider: 'Google' as const };
+    const selectedModel = modelConfig || AVAILABLE_MODELS?.[2] || fallbackModel;
+    const plainModelConfig = { id: selectedModel.id, name: selectedModel.name, provider: selectedModel.provider };
 
     const newChatData = {
       title: 'New Chat',
@@ -97,10 +92,8 @@ export const useChats = () => {
 
   const deleteChat = useCallback(async (chatId: string) => {
     if (!user) throw new Error("User not authenticated");
-
     const chatDocRef = doc(db, 'users', user.uid, 'chats', chatId);
     await deleteDoc(chatDocRef);
-
     if (currentChatId === chatId) {
       setCurrentChatId(null);
     }
@@ -108,31 +101,16 @@ export const useChats = () => {
 
   const updateCurrentChatModel = useCallback(async (modelConfig: ModelConfig) => {
     if (!user || !currentChatId) return;
-
-    const plainModelConfig = {
-      id: modelConfig.id,
-      name: modelConfig.name,
-      provider: modelConfig.provider,
-    };
-
+    const plainModelConfig = { id: modelConfig.id, name: modelConfig.name, provider: modelConfig.provider };
     const chatDocRef = doc(db, 'users', user.uid, 'chats', currentChatId);
-    await updateDoc(chatDocRef, {
-      modelConfig: plainModelConfig,
-      updatedAt: serverTimestamp(),
-    });
+    await updateDoc(chatDocRef, { modelConfig: plainModelConfig, updatedAt: serverTimestamp() });
   }, [user, currentChatId]);
 
-  // This function must be defined BEFORE saveMessagesToCurrentChat
   const generateChatTitle = useCallback(async (chatId: string, messages: Message[]) => {
     if (!user || messages.length < 2) return;
-    
     const conversationSample = messages.slice(0, 4).map(msg => `${msg.role}: ${msg.content.slice(0, 200)}`).join('\n');
     try {
-      const response = await fetch('/api/generateTitle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationSample }),
-      });
+      const response = await fetch('/api/generateTitle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversationSample }) });
       if (response.ok) {
         const data = await response.json();
         if (data.title) {
@@ -140,26 +118,20 @@ export const useChats = () => {
           await updateDoc(chatDocRef, { title: data.title });
         }
       }
-    } catch (error) {
-      console.error('Failed to generate title:', error);
-    }
+    } catch (error) { console.error('Failed to generate title:', error); }
   }, [user]);
 
   const saveMessagesToCurrentChat = useCallback(async (messages: Message[]) => {
     if (!user || !currentChatId) return;
-
     const chatDocRef = doc(db, 'users', user.uid, 'chats', currentChatId);
-    await updateDoc(chatDocRef, {
-      messages,
-      updatedAt: serverTimestamp(),
-    });
-
+    await updateDoc(chatDocRef, { messages, updatedAt: serverTimestamp() });
     const currentChat = chats.find(c => c.id === currentChatId);
     if (currentChat && currentChat.title === 'New Chat' && messages.length >= 2) {
       generateChatTitle(currentChatId, messages);
     }
   }, [user, currentChatId, chats, generateChatTitle]);
 
+  // --- THIS IS THE SIMPLIFIED AND CORRECTED VERSIONING LOGIC ---
   const saveArtifactToCurrentChat = useCallback(async (artifact: Artifact) => {
     if (!user || !currentChatId) return;
 
@@ -167,12 +139,19 @@ export const useChats = () => {
     if (!currentChat) return;
 
     const existingArtifactIndex = currentChat.artifacts.findIndex(a => a.id === artifact.id);
-    let updatedArtifacts;
+    const updatedArtifacts = [...currentChat.artifacts];
+
     if (existingArtifactIndex >= 0) {
-      updatedArtifacts = [...currentChat.artifacts];
-      updatedArtifacts[existingArtifactIndex] = artifact;
+      // UPDATE: The artifact exists. We take the latest version from the incoming
+      // artifact and push it onto the existing one's version history.
+      const latestVersion = artifact.versions[artifact.versions.length - 1];
+      if (latestVersion) {
+        updatedArtifacts[existingArtifactIndex].versions.push(latestVersion);
+        updatedArtifacts[existingArtifactIndex].updatedAt = artifact.updatedAt;
+      }
     } else {
-      updatedArtifacts = [...currentChat.artifacts, artifact];
+      // CREATE: This is a new artifact. Add it to the array.
+      updatedArtifacts.push(artifact);
     }
 
     const chatDocRef = doc(db, 'users', user.uid, 'chats', currentChatId);
@@ -193,9 +172,7 @@ export const useChats = () => {
 
   const getCurrentChatModel = useCallback((): ModelConfig => {
     const currentChat = chats.find(chat => chat.id === currentChatId);
-    // We need to find the full model config from our available models list
-    // based on the simple ID we saved in Firestore.
-    return AVAILABLE_MODELS.find(m => m.id === currentChat?.modelConfig.id) || AVAILABLE_MODELS[3];
+    return AVAILABLE_MODELS.find(m => m.id === currentChat?.modelConfig.id) || AVAILABLE_MODELS[2];
   }, [chats, currentChatId]);
 
   return {

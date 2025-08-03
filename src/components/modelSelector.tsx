@@ -14,11 +14,11 @@ interface ModelSelectorProps {
 
 const getProviderIcon = (provider: string) => {
   switch (provider) {
-    case 'openai':
+    case 'OpenAI':
       return <Brain className="w-4 h-4" />;
-    case 'google':
+    case 'Google':
       return <Sparkles className="w-4 h-4" />;
-    case 'anthropic':
+    case 'Anthropic':
       return <Zap className="w-4 h-4" />;
     default:
       return <Brain className="w-4 h-4" />;
@@ -27,11 +27,11 @@ const getProviderIcon = (provider: string) => {
 
 const getProviderColor = (provider: string) => {
   switch (provider) {
-    case 'openai':
+    case 'OpenAI':
       return 'text-green-400 bg-green-400/10 border-green-400/20';
-    case 'google':
+    case 'Google':
       return 'text-blue-400 bg-blue-400/10 border-blue-400/20';
-    case 'anthropic':
+    case 'Anthropic':
       return 'text-purple-400 bg-purple-400/10 border-purple-400/20';
     default:
       return 'text-gray-400 bg-gray-400/10 border-gray-400/20';

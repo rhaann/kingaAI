@@ -4,17 +4,17 @@ export async function GET() {
   
     // Check if OpenAI API key is configured
     if (process.env.OPENAI_API_KEY) {
-      availableProviders.push('openai');
+      availableProviders.push('OpenAI');
     }
   
     // Check if Gemini API key is configured  
     if (process.env.GEMINI_API_KEY) {
-      availableProviders.push('google');
+      availableProviders.push('Google');
     }
   
     // Check if Anthropic API key is configured
     if (process.env.ANTHROPIC_API_KEY) {
-      availableProviders.push('anthropic');
+      availableProviders.push('Anthropic');
     }
   
     return Response.json({

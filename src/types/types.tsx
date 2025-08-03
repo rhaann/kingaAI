@@ -5,7 +5,7 @@ export type Message = {
   artifactId?: string;
 };
 
-export type ModelProvider = 'openai' | 'google' | 'anthropic';
+export type ModelProvider = 'OpenAI' | 'Google' | 'Anthropic';
 
 export type ModelConfig = {
   id: string;
@@ -33,8 +33,8 @@ export type Chat = {
 export type Artifact = {
   id: string;
   title: string;
-  content: string;
   type: 'document';
+  versions: Array<{ content: string; createdAt: number }>; 
   createdAt: number;
   updatedAt: number;
 };
@@ -54,3 +54,20 @@ export type DriveFile = {
   webViewLink: string;
   webContentLink?: string;
 };
+
+/**
+ * Defines the possible return structures from the sendMessage service.
+ * It can either be a simple text response or a request to use a tool.
+ */
+export type LLMResult = 
+  | { type: 'text'; content: string | null }
+  | { 
+      type: 'tool_call'; 
+      toolName: 'create_document'; 
+      toolArgs: { title: string; content: string } 
+    }
+  | { 
+    type: 'tool_call'; 
+    toolName: 'update_document'; 
+    toolArgs: { content: string } 
+  };

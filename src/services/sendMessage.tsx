@@ -1,6 +1,6 @@
-import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
+import { GoogleGenerativeAI, Part, FunctionDeclarationTool } from '@google/generative-ai';
 import OpenAI from 'openai';
-import { ModelConfig } from '@/types/types'; // Assuming ModelConfig is in your types
+import { ModelConfig, LLMResult } from '@/types/types';
 
 // --- Define the structure for our API call options ---
 interface SendMessageOptions {
@@ -10,26 +10,72 @@ interface SendMessageOptions {
 }
 
 // --- Initialize API Clients ---
-// We initialize them once and reuse them.
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
+// --- THE "SECRET SAUCE": A Refined System Prompt for Cleaner Formatting ---
+const systemPrompt = `You are Kinga, an elite AI assistant. Your persona is that of a proactive, competent, and collaborative partner. Your primary goal is to help the user achieve their tasks by using the correct tool for the job and producing clean, professional documents.
 
-// --- THE "SECRET SAUCE": A Powerful System Prompt ---
-const systemPrompt = `You are Kinga, a world-class AI assistant designed to be exceptionally helpful, thoughtful, and comprehensive.
+**//-- CORE DIRECTIVES --//**
 
-Your primary goal is to assist users in achieving their tasks by providing clear, accurate, and detailed responses. When a user asks a question, follow these steps:
-1.  **Think Step-by-Step:** Before you answer, break down the user's request into smaller parts. Analyze the core intent and any implicit context.
-2.  **Be Thorough:** Provide comprehensive answers. Don't just give a short response; explain the 'why' behind your answer. If you provide code, explain what it does. If you suggest a plan, explain the steps.
-3.  **Structure Your Responses:** Use formatting like bullet points, and bold text to make your answers easy to read and understand.
-4.  **Consider the Context:** Pay close attention to any provided conversation history or document context. Refer to it when it's relevant to the user's current question.
-5.  **Maintain a Helpful Persona:** Your tone should be professional, encouraging, and supportive. You are a partner in the user's work.
+1.  **Analyze Context First:** Before doing anything, check if the user has provided a 'documentContext'. This context represents a document the user is actively working on.
 
-If a user's request is ambiguous, ask clarifying questions instead of making assumptions. Your ultimate goal is to be a truly valuable and indispensable assistant.`;
+2.  **Choose the Correct Tool (CRITICAL):**
+    *   **To Create:** If the user asks to **create, write, generate, or draft** a NEW document (and no documentContext is present), you MUST use the \`create_document\` tool.
+    *   **To Update:** If a **documentContext IS present** and the user's request is an instruction to **modify, improve, or change the document in any way** (e.g., "make it better," "add a section," "change the tone to be more friendly"), you MUST use the \`update_document\` tool. **DO NOT output the revised text directly in the chat.** Your only output should be the tool call.
+    *   **To Clarify:** If a request is ambiguous, ask clarifying questions before using a tool.
 
+3.  **Standard Chat:** If no tool is appropriate for the user's request, respond as a helpful assistant in plain text.
+4.  **Persona:** Maintain a professional, collaborative tone. Avoid apologies and stating you are an AI.
+
+**//-- FORMATTING RULES (CRITICAL) --//**
+
+5.  **Use Clean Markdown:** All text content should be in clean, readable Markdown.
+    *   Use headings (\`#\`, \`##\`) and lists (\`*\` or \`-\`) for structure.
+    *   **AVOID** excessive bolding. Do not bold every item in a list. Only bold the list's title (e.g., "**Action Items:**").
+    *   Write in natural, professional prose.
+
+6.  **Use User-Friendly Placeholders:** When you need the user to fill in information, you MUST use clean, descriptive placeholders enclosed in angle brackets.
+    *   **CORRECT:** \`<Insert Manager's Name Here>\` or \`<Specify a deadline>\`
+    *   **INCORRECT:** \`[Your Name]\`, \`\\[Clearly state the action]\`, or using any backslashes \`\\\\\`.
+`;
+
+// --- TOOL DEFINITIONS ---
+const createDocumentTool = {
+  type: 'function' as const,
+  function: {
+    name: 'create_document',
+    description: 'Creates a new document artifact with a title and content. Use this when the user explicitly asks to write, create, generate, or draft a new document, email, report, etc.',
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string' as const, description: 'A concise, descriptive title for the document.' },
+        content: { type: 'string' as const, description: 'The full, well-formatted markdown content of the document.' },
+      },
+      required: ['title', 'content'],
+    },
+  },
+};
+
+const updateDocumentTool = {
+  type: 'function' as const,
+  function: {
+    name: 'update_document',
+    description: 'Updates the content of the currently active document artifact. Use this when the user asks to change, add to, or modify the provided document context.',
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        content: { type: 'string' as const, description: 'The new, complete, and fully revised markdown content for the document.' },
+      },
+      required: ['content'],
+    },
+  },
+};
+
+const allTools = [createDocumentTool, updateDocumentTool];
 
 // --- The Main sendMessage Function ---
-export async function sendMessage(message: string, options: SendMessageOptions) {
+export async function sendMessage(message: string, options: SendMessageOptions): Promise<LLMResult> {
   const { modelConfig, conversationHistory = [], documentContext } = options;
 
   if (modelConfig.provider === 'Google') {
@@ -41,53 +87,57 @@ export async function sendMessage(message: string, options: SendMessageOptions) 
   }
 }
 
-
 // --- Helper function for Gemini ---
 async function sendToGemini(
   message: string,
   modelConfig: ModelConfig,
   conversationHistory: Array<{ role: 'user' | 'assistant', content: string }>,
   documentContext?: string
-) {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is not defined.");
-  }
+): Promise<LLMResult> {
+  if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not defined.");
+
+  // --- THIS IS THE FIX ---
+  // The Gemini SDK expects the tools in a specific nested format.
+  // We map our generic tool definitions to what the SDK requires.
+  const geminiTools = [{
+    functionDeclarations: allTools.map(t => t.function)
+  }];
+  // --- END OF FIX ---
 
   const model = genAI.getGenerativeModel({
     model: modelConfig.id,
-    // We inject our system prompt here!
     systemInstruction: systemPrompt,
+    tools: geminiTools, // Use the correctly formatted tools
   });
 
-  // Convert our generic history to Gemini's format ('assistant' -> 'model')
   const geminiHistory = conversationHistory.map(msg => ({
-    role: msg.role === 'assistant' ? 'model' : 'user',
+    role: msg.role === 'assistant' ? 'model' as const : 'user' as const,
     parts: [{ text: msg.content }],
   }));
 
-  // Add document context as the first part of the user's message
-  const userMessageParts = [];
+  const userMessageParts: Part[] = [];
   if (documentContext) {
-    userMessageParts.push({ text: `CONTEXT:\n---\n${documentContext}\n---\n\nQUESTION:` });
+    userMessageParts.push({ text: `Here is the content of the document we are currently working on:\n\n---\n${documentContext}\n---\n\nNow, please follow my instructions:` });
   }
   userMessageParts.push({ text: message });
 
-  const chat = model.startChat({
-    history: geminiHistory,
-    // Safety settings can be adjusted to be less restrictive if needed
-    safetySettings: [
-      { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-    ],
-  });
-
+  const chat = model.startChat({ history: geminiHistory });
   const result = await chat.sendMessage(userMessageParts);
   const response = result.response;
-  return { output: response.text() };
-}
+  const call = response.functionCalls()?.[0];
 
+  if (call) {
+    const args = call.args as { title?: string; content?: string };
+    if (call.name === 'create_document' && args.title && args.content) {
+      return { type: 'tool_call', toolName: 'create_document', toolArgs: { title: args.title, content: args.content } };
+    }
+    if (call.name === 'update_document' && args.content) {
+      return { type: 'tool_call', toolName: 'update_document', toolArgs: { content: args.content } };
+    }
+  }
+  
+  return { type: 'text', content: response.text() };
+}
 
 // --- Helper function for OpenAI ---
 async function sendToOpenAI(
@@ -95,36 +145,40 @@ async function sendToOpenAI(
   modelConfig: ModelConfig,
   conversationHistory: Array<{ role: 'user' | 'assistant', content: string }>,
   documentContext?: string
-) {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is not defined.");
-  }
+): Promise<LLMResult> {
+  if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not defined.");
 
-  // Construct the messages array in the format OpenAI expects
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    // 1. The System Prompt
     { role: "system", content: systemPrompt },
+    ...conversationHistory,
   ];
-
-  // 2. The Conversation History
-  messages.push(...conversationHistory);
-
-  // 3. The Document Context (if it exists)
   if (documentContext) {
-    messages.push({
-      role: "user",
-      content: `Here is some context from a document I am working on:\n\n---\n${documentContext}\n---`,
-    });
+    messages.push({ role: "user", content: `Here is the content of the document we are currently working on:\n\n---\n${documentContext}\n---\n\nNow, please follow my instructions:` });
   }
-
-  // 4. The User's Final Message
   messages.push({ role: "user", content: message });
 
   const completion = await openai.chat.completions.create({
-    model: modelConfig.id, // e.g., "gpt-4-turbo"
+    model: modelConfig.id,
     messages: messages,
-    temperature: 0.7, // A good balance of creative and factual
+    temperature: 0.7,
+    tools: allTools,
+    tool_choice: "auto",
   });
 
-  return { output: completion.choices[0].message.content };
+  const responseMessage = completion.choices[0].message;
+  const toolCalls = responseMessage.tool_calls;
+
+  if (toolCalls) {
+    const toolCall = toolCalls[0];
+    const args = JSON.parse(toolCall.function.arguments);
+    
+    if (toolCall.function.name === 'create_document') {
+      return { type: 'tool_call', toolName: 'create_document', toolArgs: { title: args.title, content: args.content } };
+    }
+    if (toolCall.function.name === 'update_document') {
+      return { type: 'tool_call', toolName: 'update_document', toolArgs: { content: args.content } };
+    }
+  }
+  
+  return { type: 'text', content: responseMessage.content || "" };
 }
