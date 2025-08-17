@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/context/authContext"; 
-import { GoogleDriveProvider } from "@/context/googleDriveContext"; 
-
+import { GoogleDriveProvider } from "@/context/googleDriveContext";
+import { ThemeProvider } from "@/components/themeProvider";
 
 export const metadata: Metadata = {
   title: "AI Kinga",
@@ -15,13 +15,20 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className="h-full text-white">
-        <AuthProvider> 
-          <GoogleDriveProvider> 
-              {children}
-          </GoogleDriveProvider>
-        </AuthProvider> 
+    <html lang="en" suppressHydrationWarning>
+      <body className="h-full">
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="light" 
+          enableSystem
+          disableTransitionOnChange
+        >
+          <AuthProvider> 
+            <GoogleDriveProvider> 
+                {children}
+            </GoogleDriveProvider>
+          </AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

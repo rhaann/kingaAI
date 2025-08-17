@@ -16,7 +16,6 @@ import { LogOut, Mail, KeyRound } from "lucide-react";
 import Image from "next/image";
 import { FaGoogle } from "react-icons/fa";
 
-// Helper function to create user-friendly error messages
 const getAuthErrorMessage = (errorCode: string): string => {
   switch (errorCode) {
     case "auth/email-already-in-use":
@@ -27,22 +26,24 @@ const getAuthErrorMessage = (errorCode: string): string => {
       return "Password should be at least 6 characters.";
     case "auth/user-not-found":
     case "auth/wrong-password":
-    case "auth/invalid-credential": // New error code for invalid credentials
+    case "auth/invalid-credential":
       return "Invalid email or password.";
     default:
-      console.error("Unhandled Auth Error:", errorCode); // Log unhandled errors
+      console.error("Unhandled Auth Error:", errorCode);
       return "An unexpected error occurred. Please try again.";
   }
 };
 
-export function Auth() {
+interface AuthProps {
+  collapsed?: boolean;
+}
+
+export function Auth({ collapsed = false }: AuthProps) {
   const { user, loading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // --- Handlers with full implementation ---
 
   const handleGoogleSignIn = async () => {
     const provider = new GoogleAuthProvider();
@@ -63,7 +64,6 @@ export function Auth() {
     setError(null);
     try {
       await createUserWithEmailAndPassword(auth, email, password);
-      // AuthContext will handle the redirect upon successful creation
     } catch (err) {
       const authError = err as AuthError;
       setError(getAuthErrorMessage(authError.code));
@@ -81,7 +81,6 @@ export function Auth() {
     setError(null);
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      // AuthContext will handle the redirect upon successful sign-in
     } catch (err) {
       const authError = err as AuthError;
       setError(getAuthErrorMessage(authError.code));
@@ -98,36 +97,50 @@ export function Auth() {
     }
   };
 
-  // --- Render Logic ---
-
   if (loading) {
     return (
       <div className="flex items-center justify-center p-2">
-        <div className="w-8 h-8 border-2 border-dashed rounded-full animate-spin border-gray-500"></div>
+        <div className="w-8 h-8 border-2 border-dashed rounded-full animate-spin border-muted-foreground"></div>
       </div>
     );
   }
 
   if (user) {
     return (
-      <div className="flex items-center justify-between p-2 hover:bg-gray-700 rounded-lg">
-        <div className="flex items-center gap-3">
+      <div className="group relative flex items-center gap-3 p-2 rounded-md hover:bg-muted transition-colors">
+        <div className="flex-shrink-0">
           {user.photoURL ? (
-            <Image src={user.photoURL} alt={user.displayName || "User"} width={32} height={32} className="rounded-full" />
+            <Image src={user.photoURL} alt={user.displayName || "User"} width={36} height={36} className="rounded-full" />
           ) : (
-            <div className="w-8 h-8 bg-gray-600 rounded-full flex items-center justify-center text-white font-bold">
-              {user.email?.charAt(0).toUpperCase()}
+            // --- THE AVATAR COLOR --- //
+            <div className="w-9 h-9 bg-destructive rounded-full flex items-center justify-center text-destructive-foreground font-bold text-sm">
+              {user.email?.substring(0, 2).toUpperCase()}
             </div>
+            
           )}
-          <span className="text-sm font-medium text-white truncate">{user.displayName || user.email}</span>
         </div>
-        <button onClick={handleSignOut} title="Sign Out" className="p-2 text-gray-400 hover:text-white hover:bg-gray-600 rounded-md transition-colors">
-          <LogOut className="w-5 h-5" />
-        </button>
+
+        {!collapsed && (
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-foreground truncate">{user.displayName || user.email?.split('@')[0]}</p>
+            <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+          </div>
+        )}
+
+        {!collapsed && (
+          <button 
+            onClick={handleSignOut} 
+            title="Sign Out" 
+            className="opacity-0 group-hover:opacity-100 transition-opacity p-2 text-muted-foreground hover:text-foreground rounded-md"
+          >
+            <LogOut className="w-5 h-5" />
+          </button>
+        )}
       </div>
     );
   }
 
+  // The login form remains unchanged for the login page
   return (
     <div className="w-full space-y-4">
       <div className="space-y-3">

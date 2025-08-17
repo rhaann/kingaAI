@@ -1,15 +1,15 @@
+// functions/src/index.ts
+
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
-import * as googleDrive from "./serverGoogleDriveService"; // Our Service Layer
+import { firestore } from "firebase-admin"; 
+import * as googleDrive from "./serverGoogleDriveService";
 
-// Initialize the Firebase Admin SDK. It's safe to do this once at the top level.
 admin.initializeApp();
 
 // --- FUNCTION 1: Initiate the Auth Flow ---
-
 export const googleDriveAuth = functions.https.onRequest(async (request, response) => {
   try {
-    // Security: Get the user's ID token from the request header.
     const authHeader = request.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       throw new functions.https.HttpsError("unauthenticated", "No token provided.");
@@ -17,11 +17,7 @@ export const googleDriveAuth = functions.https.onRequest(async (request, respons
     const idToken = authHeader.split("Bearer ")[1];
     const decodedToken = await admin.auth().verifyIdToken(idToken);
     const userId = decodedToken.uid;
-
-    // Call the Service to get the Google URL.
     const authUrl = googleDrive.getAuthUrl(userId);
-
-    // Redirect the user's browser to that URL.
     response.redirect(authUrl);
   } catch (error) {
     console.error("Auth initiation failed:", error);
@@ -29,31 +25,19 @@ export const googleDriveAuth = functions.https.onRequest(async (request, respons
   }
 });
 
-
 // --- FUNCTION 2: Handle the Callback from Google ---
-
 export const googleDriveCallback = functions.https.onRequest(async (request, response) => {
   try {
-    // The URL will have '?code=...' and '?state=...'
     const code = request.query.code as string;
     const state = request.query.state as string;
-
     if (!code) throw new Error("Authorization code is missing.");
     if (!state) throw new Error("State parameter is missing.");
-
-    // Security: Decode the state to get the original userId.
     const decodedState = JSON.parse(Buffer.from(state, "base64").toString("utf8"));
     const userId = decodedState.userId;
     if (!userId) throw new Error("User ID was not found in the state parameter.");
-
-    // Call the Service to exchange the code for tokens.
     const tokens = await googleDrive.getTokensFromCode(code);
-
-    // Persistence: Save the tokens securely to the user's document in Firestore.
     const userDocRef = admin.firestore().collection("users").doc(userId);
     await userDocRef.set({ googleDriveTokens: tokens }, { merge: true });
-
-    // Redirect the user back to the main application.
     const appUrl = functions.config().google.app_url || "http://localhost:3000";
     response.redirect(appUrl);
   } catch (error) {
@@ -63,18 +47,13 @@ export const googleDriveCallback = functions.https.onRequest(async (request, res
   }
 });
 
-
 // --- FUNCTION 3: Save a Document ---
-
 export const googleDriveSave = functions.https.onRequest(async (request, response) => {
-  // This is a POST request, so we check the method.
   if (request.method !== "POST") {
     response.status(405).send("Method Not Allowed");
     return;
   }
-
   try {
-    // Security: Verify the user's identity.
     const authHeader = request.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       throw new functions.https.HttpsError("unauthenticated", "No token provided.");
@@ -82,37 +61,70 @@ export const googleDriveSave = functions.https.onRequest(async (request, respons
     const idToken = authHeader.split("Bearer ")[1];
     const decodedToken = await admin.auth().verifyIdToken(idToken);
     const userId = decodedToken.uid;
-
-    // Persistence: Get the user's saved tokens from Firestore.
     const userDocRef = admin.firestore().collection("users").doc(userId);
     const docSnap = await userDocRef.get();
     const tokens = docSnap.data()?.googleDriveTokens;
     if (!tokens) {
       throw new functions.https.HttpsError("failed-precondition", "User has not connected Google Drive.");
     }
-
-    // Get the document details from the request body.
     const { title, content } = request.body;
     if (!title || !content) {
       throw new functions.https.HttpsError("invalid-argument", "Missing title or content.");
     }
-
-    // Call the Service to create the Google Doc.
-    const { file, newTokens } = await googleDrive.createGoogleDoc(tokens, title, content);
-
-    // Persistence: If the service gave us a refreshed token, save it back to the database.
+    // --- 2. FIX: Pass the userId to the service function ---
+    const { file, newTokens } = await googleDrive.createGoogleDoc(userId, tokens, title, content);
     if (newTokens) {
       await userDocRef.set({ googleDriveTokens: newTokens }, { merge: true });
     }
-
-    // Send a success response back to the client.
     response.status(200).json({ success: true, fileUrl: file.webViewLink });
   } catch (error: any) {
     console.error("Save to Drive failed:", error);
-    if (error.code) { // This is a Firebase HttpsError
+    if (error.code) {
       response.status(400).json({ error: error.message });
     } else {
       response.status(500).json({ error: "An internal error occurred." });
     }
+  }
+});
+
+// --- 3. ADD THE NEW N8N CALLBACK FUNCTION ---
+/**
+ * This is the secure Cloud Function endpoint that n8n workflows will call upon completion.
+ */
+export const n8nCallback = functions.https.onRequest(async (request, response) => {
+  if (request.method !== "POST") {
+    response.status(405).send("Method Not Allowed");
+    return;
+  }
+  try {
+    const secret = request.headers['x-kinga-secret'];
+    if (secret !== functions.config().n8n.callback_secret) {
+      console.error("Unauthorized attempt to call n8nCallback: Invalid secret.");
+      response.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { userId, chatId, resultData } = request.body;
+    if (!userId || !chatId || !resultData) {
+      response.status(400).json({ error: 'Missing required fields: userId, chatId, or resultData' });
+      return;
+    }
+
+    const newAiMessage = {
+      id: `msg-${Date.now()}`, // Add an ID for React keys
+      role: 'ai',
+      content: `The workflow has completed. Here are the results:\n\n${JSON.stringify(resultData, null, 2)}`,
+    };
+
+    const chatDocRef = admin.firestore().collection('users').doc(userId).collection('chats').doc(chatId);
+    await chatDocRef.update({
+      messages: firestore.FieldValue.arrayUnion(newAiMessage),
+      updatedAt: firestore.FieldValue.serverTimestamp(),
+    });
+
+    response.status(200).json({ success: true, message: 'Callback received and processed.' });
+  } catch (error: any) {
+    console.error("Error in n8nCallback function:", error);
+    response.status(500).json({ error: 'Internal Server Error' });
   }
 });

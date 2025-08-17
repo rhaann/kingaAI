@@ -3,6 +3,7 @@ export type Message = {
   role: "user" | "ai";
   content: string;
   artifactId?: string;
+  artifactVersion?: number; 
 };
 
 export type ModelProvider = 'OpenAI' | 'Google' | 'Anthropic';
@@ -70,4 +71,11 @@ export type LLMResult =
     type: 'tool_call'; 
     toolName: 'update_document'; 
     toolArgs: { content: string } 
-  };
+  }
+  | 
+  { 
+    type: 'tool_call';
+    toolName: string; 
+    toolArgs: any 
+
+  }; // For dynamic n8n tools

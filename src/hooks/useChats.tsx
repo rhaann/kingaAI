@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from "react";
 import {
   collection,
   query,
@@ -10,20 +10,30 @@ import {
   doc,
   serverTimestamp,
   Timestamp,
-} from 'firebase/firestore';
-import { db } from '@/services/firebase';
-import { useAuth } from '@/context/authContext';
+} from "firebase/firestore";
+import { db } from "@/services/firebase";
+import { useAuth } from "@/context/authContext";
 import { Chat, Message, Artifact, ModelConfig } from "@/types/types";
 import { AVAILABLE_MODELS } from "@/config/modelConfig";
 
-// Helper to convert Firestore Timestamps to numbers for our Chat type
+// ---- Helpers ---------------------------------------------------------------
+
+/** Convert Firestore Timestamps -> number (ms) so our app types are consistent. */
 const convertTimestamps = (chatData: any): Chat => {
   return {
     ...chatData,
-    createdAt: (chatData.createdAt as Timestamp)?.toMillis() || Date.now(),
-    updatedAt: (chatData.updatedAt as Timestamp)?.toMillis() || Date.now(),
+    createdAt: (chatData.createdAt as Timestamp)?.toMillis?.() || Date.now(),
+    updatedAt: (chatData.updatedAt as Timestamp)?.toMillis?.() || Date.now(),
   };
 };
+
+/** Deep-ish clone of an artifact (ensures a fresh versions array). */
+const cloneArtifact = (a: Artifact): Artifact => ({
+  ...a,
+  versions: [...(a.versions ?? [])],
+});
+
+// ---- Hook ------------------------------------------------------------------
 
 export const useChats = () => {
   const { user } = useAuth();
@@ -31,7 +41,7 @@ export const useChats = () => {
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Real-time listener for chat history from Firestore
+  // Real-time listener for the user's chats
   useEffect(() => {
     if (!user) {
       setChats([]);
@@ -41,139 +51,252 @@ export const useChats = () => {
     }
 
     setLoading(true);
-    const chatsCollectionRef = collection(db, 'users', user.uid, 'chats');
-    const q = query(chatsCollectionRef, orderBy('updatedAt', 'desc'));
+    const chatsRef = collection(db, "users", user.uid, "chats");
+    const q = query(chatsRef, orderBy("updatedAt", "desc"));
 
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-      const userChats = querySnapshot.docs.map(doc => {
-        const data = doc.data();
-        // Ensure artifacts array exists and is properly typed
-        const artifacts = (data.artifacts || []).map((art: any) => ({
-          ...art,
-          versions: art.versions || [{ content: art.content, createdAt: art.createdAt }]
-        }));
-        return convertTimestamps({ ...data, id: doc.id, artifacts }) as Chat;
-      });
-      setChats(userChats);
-      setLoading(false);
-    }, (error) => {
-      console.error("Error fetching chats:", error);
-      setLoading(false);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (qs) => {
+        const rows = qs.docs.map((d) => {
+          const data = d.data();
+          const messages: Message[] = (data.messages || []).map((m: any) => ({
+            ...m,
+            content:
+              typeof m?.content === "string"
+                ? m.content
+                : JSON.stringify(m?.content ?? ""),
+          }));
+        
+          // Normalize artifacts: ensure versions list exists for each artifact
+          const artifacts: Artifact[] = (data.artifacts || []).map((art: any) => {
+            const versions = Array.isArray(art.versions)
+              ? art.versions
+              : [{ content: art.content, createdAt: art.createdAt }].filter(Boolean);
+            return {
+              ...art,
+              versions,
+            } as Artifact;
+          });
+
+          return convertTimestamps({ ...data, id: d.id, messages, artifacts });
+        });
+
+        setChats(rows);
+        setLoading(false);
+      },
+      (err) => {
+        console.error("Error fetching chats:", err);
+        setLoading(false);
+      }
+    );
 
     return () => unsubscribe();
   }, [user]);
 
-  // --- CRUD FUNCTIONS ---
+  // ---- CRUD + Utilities ----------------------------------------------------
 
-  const createNewChat = useCallback(async (modelConfig?: ModelConfig): Promise<string> => {
-    if (!user) throw new Error("User not authenticated");
+  const createNewChat = useCallback(
+    async (modelConfig?: ModelConfig): Promise<string> => {
+      if (!user) throw new Error("User not authenticated");
 
-    const fallbackModel = { id: 'gemini-1.5-flash-latest', name: 'Gemini Flash', provider: 'Google' as const };
-    const selectedModel = modelConfig || AVAILABLE_MODELS?.[2] || fallbackModel;
-    const plainModelConfig = { id: selectedModel.id, name: selectedModel.name, provider: selectedModel.provider };
+      const fallbackModel: ModelConfig =
+        AVAILABLE_MODELS?.[2] ||
+        ({ id: "gpt-4o-mini", name: "GPT-4o Mini", provider: "OpenAI" } as ModelConfig);
 
-    const newChatData = {
-      title: 'New Chat',
-      messages: [],
-      artifacts: [],
-      modelConfig: plainModelConfig, 
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      userId: user.uid,
-    };
+      const selected = modelConfig || fallbackModel;
+      const plainModelConfig = {
+        id: selected.id,
+        name: selected.name,
+        provider: selected.provider,
+      } as ModelConfig;
 
-    const chatsCollectionRef = collection(db, 'users', user.uid, 'chats');
-    const docRef = await addDoc(chatsCollectionRef, newChatData);
-    
-    setCurrentChatId(docRef.id);
-    return docRef.id;
-  }, [user]);
+      const newChat = {
+        title: "New Chat",
+        messages: [] as Message[],
+        artifacts: [] as Artifact[],
+        modelConfig: plainModelConfig,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        userId: user.uid,
+      };
 
-  const deleteChat = useCallback(async (chatId: string) => {
-    if (!user) throw new Error("User not authenticated");
-    const chatDocRef = doc(db, 'users', user.uid, 'chats', chatId);
-    await deleteDoc(chatDocRef);
-    if (currentChatId === chatId) {
-      setCurrentChatId(null);
-    }
-  }, [user, currentChatId]);
+      const chatsRef = collection(db, "users", user.uid, "chats");
+      const docRef = await addDoc(chatsRef, newChat);
 
-  const updateCurrentChatModel = useCallback(async (modelConfig: ModelConfig) => {
-    if (!user || !currentChatId) return;
-    const plainModelConfig = { id: modelConfig.id, name: modelConfig.name, provider: modelConfig.provider };
-    const chatDocRef = doc(db, 'users', user.uid, 'chats', currentChatId);
-    await updateDoc(chatDocRef, { modelConfig: plainModelConfig, updatedAt: serverTimestamp() });
-  }, [user, currentChatId]);
+      setCurrentChatId(docRef.id);
+      return docRef.id;
+    },
+    [user]
+  );
 
-  const generateChatTitle = useCallback(async (chatId: string, messages: Message[]) => {
-    if (!user || messages.length < 2) return;
-    const conversationSample = messages.slice(0, 4).map(msg => `${msg.role}: ${msg.content.slice(0, 200)}`).join('\n');
-    try {
-      const response = await fetch('/api/generateTitle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversationSample }) });
-      if (response.ok) {
-        const data = await response.json();
-        if (data.title) {
-          const chatDocRef = doc(db, 'users', user.uid, 'chats', chatId);
-          await updateDoc(chatDocRef, { title: data.title });
-        }
+  const deleteChat = useCallback(
+    async (chatId: string) => {
+      if (!user) throw new Error("User not authenticated");
+      const chatRef = doc(db, "users", user.uid, "chats", chatId);
+      await deleteDoc(chatRef);
+      if (currentChatId === chatId) {
+        setCurrentChatId(null);
       }
-    } catch (error) { console.error('Failed to generate title:', error); }
-  }, [user]);
+    },
+    [user, currentChatId]
+  );
 
-  const saveMessagesToCurrentChat = useCallback(async (messages: Message[]) => {
-    if (!user || !currentChatId) return;
-    const chatDocRef = doc(db, 'users', user.uid, 'chats', currentChatId);
-    await updateDoc(chatDocRef, { messages, updatedAt: serverTimestamp() });
-    const currentChat = chats.find(c => c.id === currentChatId);
-    if (currentChat && currentChat.title === 'New Chat' && messages.length >= 2) {
-      generateChatTitle(currentChatId, messages);
-    }
-  }, [user, currentChatId, chats, generateChatTitle]);
+  const updateCurrentChatModel = useCallback(
+    async (modelConfig: ModelConfig) => {
+      if (!user || !currentChatId) return;
+      const plain = { id: modelConfig.id, name: modelConfig.name, provider: modelConfig.provider };
+      const chatRef = doc(db, "users", user.uid, "chats", currentChatId);
+      await updateDoc(chatRef, { modelConfig: plain, updatedAt: serverTimestamp() });
+    },
+    [user, currentChatId]
+  );
 
-  // --- THIS IS THE SIMPLIFIED AND CORRECTED VERSIONING LOGIC ---
-  const saveArtifactToCurrentChat = useCallback(async (artifact: Artifact) => {
-    if (!user || !currentChatId) return;
+  const generateChatTitle = useCallback(
+    async (chatId: string, messages: Message[]) => {
+      if (!user || messages.length < 2) return;
 
-    const currentChat = chats.find(chat => chat.id === currentChatId);
-    if (!currentChat) return;
-
-    const existingArtifactIndex = currentChat.artifacts.findIndex(a => a.id === artifact.id);
-    const updatedArtifacts = [...currentChat.artifacts];
-
-    if (existingArtifactIndex >= 0) {
-      // UPDATE: The artifact exists. We take the latest version from the incoming
-      // artifact and push it onto the existing one's version history.
-      const latestVersion = artifact.versions[artifact.versions.length - 1];
-      if (latestVersion) {
-        updatedArtifacts[existingArtifactIndex].versions.push(latestVersion);
-        updatedArtifacts[existingArtifactIndex].updatedAt = artifact.updatedAt;
+      const firstUser = messages.find((m) => m.role === "user")?.content ?? messages[0]?.content ?? "New Chat";
+      const singleLine = firstUser.replace(/\s+/g, " ").trim();
+      let candidate = singleLine.slice(0, 60);
+      if (singleLine.length > 60) {
+        const lastSpace = candidate.lastIndexOf(" ");
+        if (lastSpace > 20) candidate = candidate.slice(0, lastSpace);
       }
-    } else {
-      // CREATE: This is a new artifact. Add it to the array.
-      updatedArtifacts.push(artifact);
-    }
+      candidate = candidate.replace(/[:.,;!\-–—!?]+$/g, "");
+      if (candidate) candidate = candidate.charAt(0).toUpperCase() + candidate.slice(1);
 
-    const chatDocRef = doc(db, 'users', user.uid, 'chats', currentChatId);
-    await updateDoc(chatDocRef, {
-      artifacts: updatedArtifacts,
-      updatedAt: serverTimestamp(),
-    });
-  }, [user, currentChatId, chats]);
+      try {
+        const chatRef = doc(db, "users", user.uid, "chats", chatId);
+        await updateDoc(chatRef, { title: candidate || "New Chat" });
+      } catch (e) {
+        console.error("Failed to set chat title:", e);
+      }
+    },
+    [user]
+  );
 
-  const loadChat = useCallback((chatId: string) => {
-    setCurrentChatId(chatId);
-    return chats.find(chat => chat.id === chatId);
-  }, [chats]);
+  const saveMessagesToCurrentChat = useCallback(
+    async (messages: Message[]) => {
+      if (!user || !currentChatId) return;
+
+      const safeMessages: Message[] = messages.map((m) => ({
+        ...m,
+        content:
+          typeof m.content === "string"
+            ? m.content
+            : JSON.stringify(m.content ?? ""),
+      }));
+  
+      // Optimistic local update
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === currentChatId
+            ? { ...c, messages: safeMessages, updatedAt: Date.now() }
+            : c
+        )
+      );
+  
+      const chatRef = doc(db, "users", user.uid, "chats", currentChatId);
+      await updateDoc(chatRef, { messages: safeMessages, updatedAt: serverTimestamp() });
+  
+      const currentChat = chats.find((c) => c.id === currentChatId);
+      if (currentChat && currentChat.title === "New Chat" && safeMessages.length >= 2) {
+        generateChatTitle(currentChatId, safeMessages);
+      }
+    },
+    [user, currentChatId, chats, generateChatTitle]
+  );
+
+  /**
+   * Save an artifact to the current chat.
+   * - If it's new: append it with its versions.
+   * - If it exists: append only the latest incoming version to the existing versions.
+   * Returns the new version number and the persisted artifact reference.
+   */
+  const saveArtifactToCurrentChat = useCallback(
+    async (
+      incoming: Artifact
+    ): Promise<{ versionNumber: number; artifact: Artifact } | null> => {
+      if (!user || !currentChatId) return null;
+
+      const curr = chats.find((c) => c.id === currentChatId);
+      if (!curr) return null;
+
+      // Normalize incoming (fresh versions array, timestamps)
+      const normalized = cloneArtifact({
+        ...incoming,
+        createdAt: incoming.createdAt ?? Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      // Build new artifacts array immutably
+      const idx = curr.artifacts.findIndex((a) => a.id === normalized.id);
+      let newArtifacts: Artifact[];
+      let persisted: Artifact;
+
+      if (idx >= 0) {
+        const existing = cloneArtifact(curr.artifacts[idx]);
+
+        // Append only the latest version from normalized
+        const latest = normalized.versions[normalized.versions.length - 1];
+        const updatedVersions = latest
+          ? [...existing.versions, latest]
+          : [...existing.versions];
+
+        persisted = {
+          ...existing,
+          ...normalized,
+          versions: updatedVersions,
+          updatedAt: normalized.updatedAt,
+        };
+
+        newArtifacts = [...curr.artifacts];
+        newArtifacts[idx] = persisted;
+      } else {
+        // First time this artifact is saved
+        persisted = normalized;
+        newArtifacts = [...curr.artifacts, persisted];
+      }
+
+      const versionNumber = persisted.versions.length || 1;
+
+      // Optimistic local update with the exact array we will persist
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === currentChatId ? { ...c, artifacts: newArtifacts, updatedAt: Date.now() } : c
+        )
+      );
+
+      // Persist the exact same array
+      const chatRef = doc(db, "users", user.uid, "chats", currentChatId);
+      await updateDoc(chatRef, {
+        artifacts: newArtifacts,
+        updatedAt: serverTimestamp(),
+      });
+
+      return { versionNumber, artifact: persisted };
+    },
+    [user, currentChatId, chats, setChats]
+  );
+
+  const loadChat = useCallback(
+    (chatId: string) => {
+      setCurrentChatId(chatId);
+      return chats.find((c) => c.id === chatId) || null;
+    },
+    [chats]
+  );
 
   const getCurrentChat = useCallback((): Chat | null => {
-    return chats.find(chat => chat.id === currentChatId) || null;
+    return chats.find((c) => c.id === currentChatId) || null;
   }, [chats, currentChatId]);
 
   const getCurrentChatModel = useCallback((): ModelConfig => {
-    const currentChat = chats.find(chat => chat.id === currentChatId);
-    return AVAILABLE_MODELS.find(m => m.id === currentChat?.modelConfig.id) || AVAILABLE_MODELS[2];
+    const current = chats.find((c) => c.id === currentChatId);
+    return AVAILABLE_MODELS.find((m) => m.id === current?.modelConfig.id) || AVAILABLE_MODELS[2];
   }, [chats, currentChatId]);
+
+  // ---- Return API ----------------------------------------------------------
 
   return {
     chats,
@@ -187,5 +310,6 @@ export const useChats = () => {
     loadChat,
     getCurrentChat,
     getCurrentChatModel,
+    setChats, // exposed so callers can do advanced local tweaks if needed
   };
 };

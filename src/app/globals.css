@@ -1,26 +1,91 @@
+/* src/app/globals.css */
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  /* ... (all your color definitions) ... */
+  --color-pure-white: #FFFFFF;
+  --color-light-grey: #EFEFEF;
+  --color-medium-grey: #DCDCDC;
+  --color-sharp-orange: #FF3000;
+  --color-sky-blue: #0090FF;
+  --color-dark-sky-blue: #0077D1;
+  --color-turquoise: #00C6AC;
+  --color-electric-blue: #0013DC;
+  --color-navy-black: #001A29;
+
+  /* Light Theme (default) */
+  --color-border: var(--color-medium-grey);
+  --color-input: var(--color-medium-grey);
+  --color-ring: var(--color-sky-blue);
+  --color-background: var(--color-pure-white);
+  --color-foreground: var(--color-navy-black);
+  --color-primary: var(--color-sky-blue);
+  --color-primary-foreground: var(--color-pure-white);
+  --color-secondary: var(--color-light-grey);
+  --color-secondary-foreground: var(--color-navy-black);
+  --color-muted: var(--color-light-grey);
+  --color-muted-foreground: #737373;
+  --color-accent: var(--color-electric-blue);
+  --color-accent-foreground: var(--color-pure-white);
+  --color-destructive: var(--color-sharp-orange);
+  --color-destructive-foreground: var(--color-pure-white);
+
+  /* Dark Theme Overrides */
+  --dark-color-border: #27272a;
+  --dark-color-input: #27272a;
+  --dark-color-ring: var(--color-sky-blue);
+  --dark-color-background: var(--color-navy-black);
+  --dark-color-foreground: #fafafa;
+  --dark-color-primary: var(--color-sky-blue);
+  --dark-color-primary-foreground: var(--color-pure-white);
+  --dark-color-secondary: #27272a;
+  --dark-color-secondary-foreground: #fafafa;
+  --dark-color-muted: #27272a;
+  --dark-color-muted-foreground: #a1a1aa;
+  --dark-color-accent: var(--color-electric-blue);
+  --dark-color-accent-foreground: var(--color-pure-white);
+  --dark-color-destructive: var(--color-sharp-orange);
+  --dark-color-destructive-foreground: var(--color-pure-white);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+.dark {
+  --color-border: var(--dark-color-border);
+  --color-input: var(--dark-color-input);
+  --color-ring: var(--dark-color-ring);
+  --color-background: var(--dark-color-background);
+  --color-foreground: var(--dark-color-foreground);
+  --color-primary: var(--dark-color-primary);
+  --color-primary-foreground: var(--dark-color-primary-foreground);
+  --color-secondary: var(--dark-color-secondary);
+  --color-secondary-foreground: var(--dark-color-secondary-foreground);
+  --color-muted: var(--dark-color-muted);
+  --color-muted-foreground: var(--dark-color-muted-foreground);
+  --color-accent: var(--dark-color-accent);
+  --color-accent-foreground: var(--dark-color-accent-foreground);
+  --color-destructive: var(--dark-color-destructive);
+  --color-destructive-foreground: var(--dark-color-destructive-foreground);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent; 
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-border); 
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-muted-foreground); 
 }
