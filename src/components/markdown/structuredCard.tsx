@@ -1,132 +1,155 @@
-// src/app/components/markdown/StructuredCard.tsx
-"use client";
+'use client';
 
-import React, { useMemo, useState } from "react";
+import * as React from "react";
+import type { KingaCard } from "@/types/types";
 
-function Badge({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-muted text-muted-foreground border border-border">
-      {children}
-    </span>
-  );
+// Temporary shim: accept legacy `data` and convert to KingaCard when possible.
+function toKingaCard(input: unknown): KingaCard | null {
+  if (!input || typeof input !== "object") return null;
+
+  // Already a KingaCard?
+  const k = input as any;
+  if (Array.isArray(k?.sections)) return k as KingaCard;
+
+  // Legacy flat object -> single section
+  const obj = input as Record<string, unknown>;
+  const items = Object.entries(obj).map(([label, value]) => ({
+    label,
+    value: value == null ? "" : String(value),
+  }));
+
+  return {
+    title: "Result",
+    summary: undefined,
+    sections: [{ title: undefined, items }],
+  };
 }
 
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1000);
-        } catch {}
-      }}
-      className="text-xs px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-90"
-      title="Copy email"
-    >
-      {copied ? "Copied" : "Copy email"}
-    </button>
-  );
-}
-
-/** Build a friendly contact-like summary from common agent/MCP shapes */
-function useContactSummary(data: any) {
-  return useMemo(() => {
-    // Prefer first item if array
-    const obj = Array.isArray(data) ? data[0] : data;
-    const msg = obj?.message ?? obj;
-
-    const firstName = msg?.first_name ?? msg?.firstName ?? obj?.first_name ?? obj?.firstName;
-    const lastName  = msg?.last_name  ?? msg?.lastName  ?? obj?.last_name  ?? obj?.lastName;
-    const name      = msg?.name ?? obj?.name ?? [firstName, lastName].filter(Boolean).join(" ") || undefined;
-
-    const title     = msg?.job_title ?? msg?.title ?? obj?.job_title ?? obj?.title;
-    const email     = msg?.email ?? obj?.email ?? msg?.email_address ?? obj?.email_address;
-    const status    = msg?.email_status ?? obj?.email_status ?? msg?.status ?? obj?.status;
-    const conf      = msg?.match_confidence ?? obj?.match_confidence;
-
-    // common link fields
-    const sourceUrl =
-      msg?.linkedin_url ??
-      obj?.linkedin_url ??
-      (typeof msg?.source === "string" && msg.source.startsWith("http") ? msg.source : undefined);
-
-    // pick up a few other useful scalars to show in a simple list
-    const extras: Record<string, string> = {};
-    const candidates: Array<[string, any]> = Object.entries(msg ?? obj ?? {}).filter(
-      ([, v]) => ["string", "number", "boolean"].includes(typeof v)
-    );
-    for (const [k, v] of candidates) {
-      if (
-        ["first_name","firstName","last_name","lastName","name","job_title","title","email","email_address","email_status","status","match_confidence","linkedin_url","source"].includes(k)
-      ) continue;
-      extras[k] = String(v);
+// Turn a card into plain text for clipboard
+function cardToPlainText(card: KingaCard): string {
+  const lines: string[] = [];
+  if (card.title) lines.push(card.title);
+  if (card.summary) lines.push(card.summary);
+  for (const section of card.sections || []) {
+    if (section.title) lines.push(`\n${section.title}`);
+    for (const it of section.items || []) {
+      lines.push(`${it.label}: ${it.value ?? ""}`);
     }
-
-    return { name, title, email, status, confidence: conf, sourceUrl, extras };
-  }, [data]);
+  }
+  return lines.join("\n");
 }
+
+type StructuredCardProps = {
+  /** New preferred prop */
+  card?: KingaCard;
+  /** Legacy prop – flat object; will be converted */
+  data?: unknown;
+  title?: string; // optional override if legacy `data` lacked a title
+  frameless?: boolean; // optional: remove the border
+};
 
 export default function StructuredCard({
+  card,
   data,
   title = "Result",
-}: {
-  data: any;
-  title?: string;
-}) {
-  const summary = useContactSummary(data);
-  const hasAnything =
-    !!(summary.name || summary.title || summary.email || summary.status || summary.confidence || summary.sourceUrl) ||
-    Object.keys(summary.extras).length > 0;
+  frameless
+}: StructuredCardProps) {
+  const resolved = React.useMemo(() => card ?? toKingaCard(data), [card, data]);
+  const [copiedKey, setCopiedKey] = React.useState<string | null>(null);
 
-  if (!hasAnything) return null;
+  if (!resolved) return null;
+
+  async function copy(text: string, key: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 1200);
+    } catch {
+      // noop
+    }
+  }
+
+  const { title: cardTitle, summary, sections } = resolved;
+  const containerClass = frameless
+    ? "" 
+    : "rounded-2xl border border-neutral-200/20 bg-neutral-800/60 text-neutral-50 p-6 md:p-7 dark:border-neutral-700/40";
+  
 
   return (
-    <div className="rounded-xl border border-border bg-background overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border">
-        <div className="text-xs uppercase tracking-wider text-muted-foreground">{title}</div>
-        {summary.email ? <CopyButton text={summary.email} /> : null}
+    <div className={containerClass}>
+      <div className="mb-2 text-lg font-semibold">
+        {cardTitle ?? title}
       </div>
 
-      <div className="p-4 space-y-4">
-        <div className="space-y-2">
-          {(summary.name || summary.title) && (
-            <div className="text-base font-semibold">
-              {summary.name ?? "Contact"}
-              {summary.title ? <span className="font-normal"> — {summary.title}</span> : null}
-            </div>
-          )}
+      {summary ? (
+        <div className="mb-5 text-sm text-neutral-300">{summary}</div>
+      ) : null}
 
-          <div className="flex items-center gap-2 flex-wrap">
-            {summary.email ? <Badge>{summary.email}</Badge> : null}
-            {summary.status ? <Badge>{String(summary.status)}</Badge> : null}
-            {typeof summary.confidence === "number" ? (
-              <Badge>confidence: {(summary.confidence * 100).toFixed(0)}%</Badge>
-            ) : null}
-            {summary.sourceUrl ? (
-              <a
-                className="text-xs px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground border border-border hover:bg-border"
-                href={summary.sourceUrl}
-                target="_blank"
-                rel="noreferrer"
-              >
-                View source
-              </a>
-            ) : null}
-          </div>
-        </div>
-
-        {Object.keys(summary.extras).length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {Object.entries(summary.extras).map(([k, v]) => (
-              <div key={k} className="flex gap-2">
-                <div className="text-xs font-medium text-muted-foreground w-28 shrink-0">{k}</div>
-                <div className="text-sm break-words">{v}</div>
+      <div className="space-y-5">
+        {sections?.map((section, idx) => (
+          <div key={idx}>
+            {section.title ? (
+              <div className="mb-2 font-medium text-neutral-200">
+                {section.title}
               </div>
-            ))}
+            ) : null}
+            <dl className="grid grid-cols-[160px_1fr] gap-x-6 gap-y-2">
+              {section.items?.map((it, jdx) => {
+                const key = `s${idx}-i${jdx}`;
+                const isUrl = /^https?:\/\//i.test(it.value);
+                return (
+                  <React.Fragment key={key}>
+                    <dt className="text-neutral-400">{it.label}:</dt>
+                    <dd className="break-words relative group">
+                      {isUrl ? (
+                        <a
+                          className="underline"
+                          href={it.value}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {it.value}
+                        </a>
+                      ) : (
+                        <span className="whitespace-pre-wrap">{it.value}</span>
+                      )}
+
+                      {/* Per-row copy (visible on hover) */}
+                      <button
+                        type="button"
+                        onClick={() => copy(String(it.value ?? ""), key)}
+                        className="ml-3 inline-flex items-center rounded-md border border-neutral-500/40 px-2 py-0.5 text-xs opacity-0 transition group-hover:opacity-100 hover:border-neutral-400"
+                        aria-label={`Copy ${it.label}`}
+                        title={`Copy ${it.label}`}
+                      >
+                        Copy
+                      </button>
+                      {copiedKey === key ? (
+                        <span className="ml-2 text-xs text-neutral-400">Copied</span>
+                      ) : null}
+                    </dd>
+                  </React.Fragment>
+                );
+              })}
+            </dl>
           </div>
-        )}
+        ))}
+      </div>
+
+      {/* Copy whole card */}
+      <div className="mt-6 flex justify-end">
+        <button
+          type="button"
+          onClick={() => copy(cardToPlainText(resolved), "card")}
+          className="inline-flex items-center rounded-md border border-neutral-500/40 px-3 py-1 text-sm hover:border-neutral-400"
+          aria-label="Copy card"
+          title="Copy card"
+        >
+          Copy card
+        </button>
+        {copiedKey === "card" ? (
+          <span className="ml-2 text-xs text-neutral-400 self-center">Copied</span>
+        ) : null}
       </div>
     </div>
   );

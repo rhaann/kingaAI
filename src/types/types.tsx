@@ -1,9 +1,27 @@
+// UI card spec returned by tools (application/kinga.card+json)
+export interface KingaCardItem {
+  label: string;
+  value: string; // render as text or link; renderer can detect URLs
+}
+
+export interface KingaCardSection {
+  title?: string;
+  items: KingaCardItem[];
+}
+
+export interface KingaCard {
+  title?: string;
+  summary?: string;
+  sections: KingaCardSection[];
+}
+
 export type Message = {
   id: string;
   role: "user" | "ai";
   content: string;
   artifactId?: string;
   artifactVersion?: number; 
+  card?: KingaCard;
 };
 
 export type ModelProvider = 'OpenAI' | 'Google' | 'Anthropic';
@@ -79,3 +97,7 @@ export type LLMResult =
     toolArgs: any 
 
   }; // For dynamic n8n tools
+
+
+
+  

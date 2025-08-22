@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { ModelConfig, LLMResult } from "@/types/types";
 import { AVAILABLE_TOOLS, AITool } from "./toolsConfig";
+import { SYSTEM_PROMPT } from "@/lib/prompt/systemPrompt";
 
 // -----------------------------
 // Types
@@ -8,7 +9,7 @@ import { AVAILABLE_TOOLS, AITool } from "./toolsConfig";
 interface SendMessageOptions {
   modelConfig: ModelConfig;
   conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
-  documentContext?: string; // present when a document is open
+  documentContext?: string; // present when a document is open (artifact + versions snapshot)
 }
 
 // -----------------------------
@@ -17,60 +18,9 @@ interface SendMessageOptions {
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // -----------------------------
-// System Prompt
+// Tool plumbing
 // -----------------------------
-const systemPrompt = `You are Kinga, an elite business assistant. Your primary function is to help users accomplish tasks by using the tools provided.
-
-**//-- Core Process Rules --//**
-* **Document Creation Process:** When a user asks to 'write', 'create', 'draft', or 'generate' a document/email/report/etc., you MUST call \`create_document\`. Do NOT paste the document in chat.
-* **Document Update Process:** When a document is open (a "Context" has been provided) and the user asks to 'change', 'add to', 'revise', 'edit', 'modify', or 'replace' it, you MUST call \`update_document\` with the full, revised content. Do NOT paste the updated text in chat.
-* **General Queries:** For questions not involving creating/editing a document, respond with a helpful text answer.
-
-**//-- Output Formatting Rules --//**
-* When providing structured responses for tools, use the tool call only—no extra text before/after.
-* Do not include "index", "message", "role", or "content" meta when returning structured JSON. Only the fields themselves.
-
-**//-- Critical Final Instruction --//**
-* Never mention tools by name. If you decide to use a tool, your ONLY output must be that tool call (no conversational text).`;
-
-// -----------------------------
-// Built-in tool specs (same as before)
-// -----------------------------
-const createDocumentTool: AITool = {
-  name: "create_document",
-  description:
-    "Creates a new document artifact with a title and content. Use this when the user explicitly asks to write, create, generate, or draft a new document, email, report, etc.",
-  executionType: "in_house",
-  endpoint: "",
-  parameters: {
-    type: "object",
-    properties: {
-      title: { type: "string", description: "A concise, descriptive title for the document." },
-      content: { type: "string", description: "The full content of the document." },
-    },
-    required: ["title", "content"],
-  },
-};
-
-const updateDocumentTool: AITool = {
-  name: "update_document",
-  description:
-    "Updates the content of the currently active document artifact. Use this when the user asks to change, add to, or modify the provided document context.",
-  executionType: "in_house",
-  endpoint: "",
-  parameters: {
-    type: "object",
-    properties: {
-      content: {
-        type: "string",
-        description: "The new, complete, and fully revised content for the document.",
-      },
-    },
-    required: ["content"],
-  },
-};
-
-const allAppTools = [...[createDocumentTool, updateDocumentTool], ...AVAILABLE_TOOLS];
+const allAppTools = [...AVAILABLE_TOOLS];
 
 function convertToOpenAITool(tool: AITool): OpenAI.Chat.Completions.ChatCompletionTool {
   return {
@@ -84,7 +34,7 @@ function convertToOpenAITool(tool: AITool): OpenAI.Chat.Completions.ChatCompleti
 }
 
 // -----------------------------
-// Intent detection (lightweight & fast)
+// Lightweight intent detection
 // -----------------------------
 const CREATE_RE =
   /\b(write|create|draft|generate|compose|make|produce)\b.*\b(email|document|letter|note|proposal|plan|report)\b/i;
@@ -93,16 +43,15 @@ const UPDATE_RE =
   /\b(update|revise|edit|change|modify|append|add|tweak|replace|fix|adjust|remove)\b/i;
 
 function isCreateIntent(msg: string, hasOpenDoc: boolean) {
-  if (hasOpenDoc) return false; // if a doc is open, edits usually trump create
+  if (hasOpenDoc) return false; // with an open doc, editing is more likely than creating
   return CREATE_RE.test(msg);
 }
-
 function isUpdateIntent(msg: string, hasOpenDoc: boolean) {
   return hasOpenDoc && UPDATE_RE.test(msg);
 }
 
-// Fallback: the model sometimes replies with "Subject:" or "Content:" text instead of the tool call.
-// Treat these as strong update indicators if a doc is open.
+// If the model outputs “Subject:” / “Content:” as raw text while a doc is open,
+// treat that as a likely update.
 const LOOKS_LIKE_DOC_TEXT_RE = /^(subject\s*:|content\s*:)/i;
 
 // -----------------------------
@@ -122,7 +71,7 @@ export async function sendMessage(
 }
 
 // -----------------------------
-// OpenAI path with enforcement
+// OpenAI path with guardrails
 // -----------------------------
 async function sendToOpenAI(
   message: string,
@@ -130,20 +79,32 @@ async function sendToOpenAI(
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
   documentContext?: string
 ): Promise<LLMResult> {
-  if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not defined.");
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is not defined.");
+  }
 
   const hasOpenDoc = !!documentContext;
   const wantsUpdate = isUpdateIntent(message, hasOpenDoc);
   const wantsCreate = isCreateIntent(message, hasOpenDoc);
 
+  // Start with system prompt + prior conversation
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: systemPrompt },
+    { role: "system", content: SYSTEM_PROMPT },
     ...conversationHistory,
   ];
 
-  if (hasOpenDoc) {
-    messages.push({ role: "user", content: `Context:\n${documentContext}` });
+  // ✅ Inject the artifact snapshot ONCE as a system message (context for the LLM)
+  if (documentContext) {
+    messages.push({
+      role: "system",
+      content:
+        "DOCUMENT CONTEXT (snapshot of the open artifact and versions):\n" +
+        documentContext +
+        "\n\nRule: When updating the document, ALWAYS return the complete updated document (not a diff).",
+    });
   }
+
+  // User’s request
   messages.push({ role: "user", content: message });
 
   // Build request
@@ -153,11 +114,10 @@ async function sendToOpenAI(
     temperature: 0.7,
     tools: allAppTools.map(convertToOpenAITool),
     parallel_tool_calls: false,
-    // Default is "auto", but we override below when we can be certain.
-    tool_choice: "auto",
+    tool_choice: "auto", // default
   };
 
-  // Enforce the right tool when the intent is obvious
+  // Enforce the right tool when intent is obvious
   if (wantsUpdate) {
     req.tool_choice = { type: "function", function: { name: "update_document" } };
   } else if (wantsCreate) {
@@ -176,12 +136,10 @@ async function sendToOpenAI(
   }
 
   // --------- SAFETY NET ----------
-  // If we *expected* an update but got raw text (the model was stubborn),
-  // coerce that text into an update_document call so the chat shows a new version.
+  // If we expected an update (or the raw text looks like doc content),
+  // but the model returned plain text, coerce it into an update.
   const raw = (responseMessage?.content || "").trim();
   if (hasOpenDoc && (wantsUpdate || LOOKS_LIKE_DOC_TEXT_RE.test(raw))) {
-    // If the text looks like content/subject or we were enforcing update,
-    // treat it as the updated document content.
     return {
       type: "tool_call",
       toolName: "update_document",

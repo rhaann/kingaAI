@@ -13,7 +13,7 @@ type Props = {
 export default function ChatInputBox({
   onSend,
   disabled = false,
-  placeholder = "Start typing a prompt...",
+  placeholder = "Start typing...",
 }: Props) {
   const [value, setValue] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);

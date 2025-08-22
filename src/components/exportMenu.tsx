@@ -19,31 +19,26 @@ interface ExportOption {
 }
 
 const EXPORT_OPTIONS: ExportOption[] = [
-  {
-    format: 'google-drive',
-    label: 'Save to Google Drive',
-    description: 'Save to Kinga Documents folder',
-    icon: Cloud,
-    requiresGoogleDrive: true
-  },
+  // {
+  //   format: 'google-drive',
+  //   label: 'Save to Google Drive',
+  //   description: 'Save to Kinga Documents folder',
+  //   icon: Cloud,
+  //   requiresGoogleDrive: true
+  // },
   {
     format: 'pdf',
     label: 'Export as PDF',
     description: 'Professional document format',
     icon: FileText
   },
-  {
-    format: 'word',
-    label: 'Export as Word',
-    description: 'Editable document format',
-    icon: FileText
-  },
-  {
-    format: 'markdown',
-    label: 'Export as Markdown',
-    description: 'Plain text with formatting',
-    icon: FileText
-  },
+  // {
+  //   format: 'word',
+  //   label: 'Export as Word',
+  //   description: 'Editable document format',
+  //   icon: FileText
+  // },
+
   {
     format: 'text',
     label: 'Export as Text',
