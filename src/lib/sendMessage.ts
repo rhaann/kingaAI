@@ -39,6 +39,21 @@ function convertToOpenAITool(tool: {
   };
 }
 
+function getCurrentDateTime() {
+  const now = new Date();
+  const nowUtcIso = now.toISOString();
+  const nowCt = new Intl.DateTimeFormat("en-US", {
+    dateStyle: "full",
+    timeStyle: "short",
+    timeZone: "America/Chicago",
+  }).format(now);
+  const todayCt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Chicago",
+  }).format(now); // YYYY-MM-DD
+
+  return `Current datetime is ${nowCt} (America/Chicago). UTC=${nowUtcIso}. ISO_DATE_CT=${todayCt}.`;
+}
+
 const CREATE_RE =
   /\b(write|create|draft|generate|compose|make|produce)\b.*\b(email|document|letter|note|proposal|plan|report)\b/i;
 const UPDATE_RE =
@@ -99,7 +114,7 @@ async function sendToOpenAI(
   const wantsCreate = isCreateIntent(message, hasOpenDoc);
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: SYSTEM_PROMPT + "\n\n" + getCurrentDateTime() },
     ...conversationHistory,
   ];
 

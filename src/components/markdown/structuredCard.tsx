@@ -71,18 +71,19 @@ export default function StructuredCard({
 
   const { title: cardTitle, summary, sections } = resolved;
   const containerClass = frameless
-    ? "" 
-    : "rounded-2xl border border-neutral-200/20 bg-neutral-800/60 text-neutral-50 p-6 md:p-7 dark:border-neutral-700/40";
-  
+  ? "p-3 sm:p-4 md:p-5"
+  : "rounded-2xl border border-neutral-200/20 bg-neutral-800/60 text-neutral-50 shadow-sm p-6 md:p-7 dark:border-neutral-700/40";
+
+
 
   return (
-    <div className={containerClass}>
+    <div className={`${containerClass} text-base`}>
       <div className="mb-2 text-lg font-semibold">
         {cardTitle ?? title}
       </div>
 
       {summary ? (
-        <div className="mb-5 text-sm text-neutral-300">{summary}</div>
+        <div className="mb-5 text-base text-neutral-300">{summary}</div>
       ) : null}
 
       <div className="space-y-5">
@@ -93,17 +94,17 @@ export default function StructuredCard({
                 {section.title}
               </div>
             ) : null}
-            <dl className="grid grid-cols-[160px_1fr] gap-x-6 gap-y-2">
+            <dl className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-x-6 gap-y-2">
               {section.items?.map((it, jdx) => {
                 const key = `s${idx}-i${jdx}`;
                 const isUrl = /^https?:\/\//i.test(it.value);
                 return (
                   <React.Fragment key={key}>
                     <dt className="text-neutral-400">{it.label}:</dt>
-                    <dd className="break-words relative group">
+                    <dd className="break-words relative group min-w-0">
                       {isUrl ? (
                         <a
-                          className="underline"
+                          className="underline break-all"
                           href={it.value}
                           target="_blank"
                           rel="noreferrer"
@@ -111,7 +112,7 @@ export default function StructuredCard({
                           {it.value}
                         </a>
                       ) : (
-                        <span className="whitespace-pre-wrap">{it.value}</span>
+                        <span className="whitespace-pre-wrap break-words">{it.value}</span>
                       )}
 
                       {/* Per-row copy (visible on hover) */}

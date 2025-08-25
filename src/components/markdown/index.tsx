@@ -176,7 +176,7 @@ export default function MarkdownRenderer({ content }: Props) {
   if (!fieldList) {
     // Not structured — show the original text plainly (with links if any)
     return (
-      <div className="text-sm leading-relaxed whitespace-pre-wrap">
+      <div className="text-base leading-relaxed whitespace-pre-wrap">
         {renderWithLinks(content)}
       </div>
     );
@@ -190,7 +190,7 @@ export default function MarkdownRenderer({ content }: Props) {
   const hasAnyNonEmpty = fieldList.some((f) => (f.value ?? "") !== "");
 
   return (
-    <div className="space-y-2 text-sm">
+    <div className="space-y-2 text-base">
       {!hasAnyNonEmpty && (
         <div className="text-foreground/70 italic">
           We couldn’t find structured fields in this response.

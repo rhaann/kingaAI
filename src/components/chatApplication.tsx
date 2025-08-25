@@ -487,7 +487,7 @@ export function ChatApplication() {
                 </h1>
               </div>
             ) : (
-              <div className="max-w-3xl mx-auto space-y-5">
+              <div className="max-w-5xl mx-auto space-y-5">
                 {messages.map((message) => {
                   const isUser = message.role === "user";
 
@@ -522,16 +522,13 @@ export function ChatApplication() {
                   const isCardMsg = !!message.card || isKingaCardFromParsed;
 
                   const bubbleClass = isCardMsg
-                    ? `max-w-[85%] rounded-2xl px-4 py-3 ${
-                        isUser
-                          ? "bg-turquoise text-white"
-                          : "bg-secondary text-secondary-foreground"
-                      }`
-                    : `max-w-[85%] rounded-2xl px-4 py-3 space-y-3 ${
-                        isUser
-                          ? "bg-turquoise text-white"
-                          : "bg-secondary text-secondary-foreground"
-                      }`;
+                    ? "max-w-full sm:max-w-[90%] md:max-w-[75%] lg:max-w-[65%] p-0"
+                    : `max-w-full sm:max-w-[90%] md:max-w-[75%] lg:max-w-[65%]
+                        rounded-2xl p-3 sm:p-4 shadow-sm border
+                        ${isUser
+                          ? "bg-turquoise text-white border-turquoise/60"
+                          : "bg-secondary text-secondary-foreground border-border"
+                        }`;
 
                   return (
                     <div
@@ -549,10 +546,10 @@ export function ChatApplication() {
                         ) : isCardMsg ? (
                           <StructuredCard
                             card={(message.card ?? (parsed as KingaCard))}
-                            frameless
+                            
                           />
                         ) : isRecord ? (
-                          <StructuredCard data={parsed} frameless />
+                          <StructuredCard data={parsed}  />
                         ) : (
                           <MarkdownRenderer content={contentStr} />
                         )}

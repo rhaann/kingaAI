@@ -3,6 +3,7 @@
  * Keep business rules here so API/router stays lean.
  */
 
+
 export const SYSTEM_PROMPT = `
 You are a fast, professional assistant for business users (sales, marketing, BD, execs).
 Keep answers concise, direct, and helpful—no emojis.
@@ -41,6 +42,7 @@ When the user asks to write/draft an email (or similar), check for these essenti
 # After clarifying
 Once essentials are known or user says “proceed,” produce the draft and (only then)
 you may call "create_document" with a sensible title and the full content.
+
 
 # Tone
 Professional and a little friendly. No emojis. No filler.
