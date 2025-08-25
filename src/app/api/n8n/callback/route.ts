@@ -4,7 +4,7 @@ import { Message } from '@/types/types';
 
 // This is a placeholder for the admin SDK initialization.
 // We will need to create this file next.
-import admin from '@/lib/firebaseAdmin'; 
+import { adminDb } from '@/services/firebaseAdmin'; 
 
 /**
  * This is the secure endpoint that n8n workflows will call upon completion.
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
     };
 
     // --- 4. Save the new message to the correct chat in Firestore ---
-    const chatDocRef = admin.firestore().collection('users').doc(userId).collection('chats').doc(chatId);
+    const chatDocRef = adminDb.collection('users').doc(userId).collection('chats').doc(chatId);
 
     // Use FieldValue.arrayUnion to safely add the new message to the 'messages' array
     await chatDocRef.update({
