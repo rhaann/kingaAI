@@ -10,6 +10,8 @@
 !.yarn/releases
 !.yarn/versions
 
+/.keys/kinga-sa.json
+
 # testing
 /coverage
 

@@ -8,10 +8,13 @@ import { runCrm } from "@/lib/tools/runners/crm";
 import { MCP_SERVER, llmToolsForPermissions } from "@/config/toolsConfig";
 import { runEmailFinder } from "@/lib/tools/runners/emailFinder";
 
+
+
 // If you already have auth helpers, keep them.
 // Otherwise, this example assumes you verify user elsewhere and have a UID here.
 import { getUserFromRequest } from "@/services/authRequest";
 import { adminDb } from "@/services/firebaseAdmin";
+import { FieldPath } from "firebase-admin/firestore";
 
 /** What we return to the client */
 type ApiResult = {
@@ -62,28 +65,58 @@ function buildUpdateArtifact(currentArtifactId: string | null, args: any) {
   };
 }
 
-/** Read tool permissions from Firestore: users/{uid}/toolPermissions/tools */
-async function readToolFlags(uid: string): Promise<{
-  email_finder: boolean;
-  search: boolean;
-  crm: boolean;
-}> {
-  try {
-    const snap = await adminDb.doc(`users/${uid}/toolPermissions`).get();
-    console.log("[/api/chat] snap:", snap);
-    if (!snap.exists) {
-      return { email_finder: false, search: false, crm: false };
+
+async function readToolFlags(userId: string): Promise<{ [key: string]: boolean }> {
+  const toolIds = ["crm", "email_finder", "search"];
+
+  const permissionsRef = adminDb
+    .collection("users")
+    .doc(userId)
+    .collection("toolPermissions");
+
+    console.log("[/api/chat] permissionsRef:", permissionsRef);
+
+  // Query by document ID for the tools we care about
+  const q = permissionsRef.where(FieldPath.documentId(), "in", toolIds);
+  console.log("[/api/chat] q:", q);
+
+  // Default: fail closed
+  const permissionsStatus: { [key: string]: boolean } = {
+    crm: false,
+    email_finder: false,
+    search: false,
+  };
+
+  // Helper: tolerate different boolean field names
+  const pickBool = (data: any): boolean | undefined => {
+    const candidates = ["enabled", "allowed", "allow", "value", "on", "active", "isEnabled"];
+    for (const k of candidates) {
+      if (typeof data?.[k] === "boolean") return data[k];
     }
-    const d = snap.data() as any;
-    return {
-      email_finder: !!d?.email_finder,
-      search: !!d?.search,
-      crm: !!d?.crm,
-    };
-  } catch {
-    return { email_finder: true, search: true, crm: true };
+    return undefined;
+  };
+
+  try {
+    const querySnapshot = await q.get();
+
+    querySnapshot.forEach((doc) => {
+      const data = doc.data() as Record<string, any>;
+      const v = pickBool(data);
+      if (typeof v === "boolean" && doc.id in permissionsStatus) {
+        permissionsStatus[doc.id] = v;
+      }
+    });
+
+    return permissionsStatus;
+  } catch (error) {
+    console.error("Error fetching tool permissions:", error);
+    // Return defaults (all false) rather than {}
+    return permissionsStatus;
   }
 }
+
+
+
 
 /** Pull the tool envelope JSON out of assistant output for logging (optional) */
 function extractToolEnvelopeFromOutput(output: string) {

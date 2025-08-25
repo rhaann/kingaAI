@@ -1,15 +1,11 @@
-
 /**
  * Firebase Admin (server-only)
  * - Initializes a single Admin app (lazy singleton).
  * - Exposes `adminAuth`, `adminDb`, and `verifyIdToken(idToken)`.
- * - Uses `applicationDefault()` creds (GOOGLE_APPLICATION_CREDENTIALS).
- *   Swap to `cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY!))` if needed.
- * - Never import this in client code.
+ * - Prefers FIREBASE_SERVICE_ACCOUNT_KEY; falls back to ADC.
  */
 
-
-import { getApps, initializeApp, applicationDefault } from "firebase-admin/app";
+import { getApps, initializeApp, applicationDefault, cert } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -20,16 +16,22 @@ if (!projectId) {
   throw new Error("[firebaseAdmin] Set FIREBASE_PROJECT_ID in .env.local");
 }
 
-// Try ADC if available; ok if missing (verifyIdToken only needs projectId).
-let cred: any | undefined;
-try { cred = applicationDefault(); } catch { cred = undefined; }
+// Prefer explicit service account (FIREBASE_SERVICE_ACCOUNT_KEY), else ADC
+let credential: any | undefined;
+const sa = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+try {
+  if (sa) credential = cert(JSON.parse(sa));
+  else credential = applicationDefault();
+} catch {
+  // If parsing ADC fails, leave credential undefined (use unauth'ed app with projectId)
+  credential = undefined;
+}
 
 const app =
   getApps()[0] ||
   initializeApp({
     projectId,
-    // credential is optional; present if ADC available
-    ...(cred ? { credential: cred } : {}),
+    ...(credential ? { credential } : {}),
   });
 
 export const adminAuth = getAuth(app);
