@@ -8,8 +8,8 @@
  * - MCP_SERVER: endpoint + auth header for the n8n MCP gateway (from env).
  * - MCP_TOOL_IDS: stable mapping of friendly tool names → actual MCP ids:
  *     email_finder → "email_finder"
- *     kinga_search → "search"
- *     kinga_crm    → "crm"
+ *     search → "search"
+ *     crm    → "crm"
  *
  * Notes:
  * - Keep MCP_TOOL_IDS as the single source of truth; runners import it to hit
@@ -82,23 +82,25 @@ export function toolCatalogForLLM(): AITool[] {
 
 /** MCP server connection info (envs) */
 export const MCP_SERVER = {
-  endpoint: process.env.N8N_KINGA_MCP_ENDPOINT || // preferred
-    process.env.N8N_MCP_ENDPOINT ||               // fallback
+  endpoint:
+    process.env.N8N_MCP_BASE_URL || // align with email_finder runner env
+    process.env.N8N_KINGA_MCP_ENDPOINT ||
+    process.env.N8N_MCP_ENDPOINT ||
     "https://actualinsight.app.n8n.cloud/mcp/8f189c68-6f6a-4924-b06d-2d58542afe4e",
-  authHeaderName: "kinga_key",
+  authHeaderName: process.env.N8N_AUTH_HEADER_NAME || "kinga_key",
   authHeaderValue: process.env.N8N_AUTH_HEADER_VALUE || "",
 };
 export const MCP_TOOL_IDS = {
   email_finder: "email_finder",
-  kinga_search: "search",
-  kinga_crm: "crm",
+  search: "search",
+  crm: "crm",
 } as const;
 
 
 // === LLM-visible MCP tools (names the model will call) ===
 export const EXTERNAL_MCP_TOOLS_FOR_LLM = [
   {
-    name: "kinga_search",
+    name: "search",
     description:
       "Search the current web and extract facts with citations. Input: agent_query (a search-style query). Returns structured findings and source links.",
     parameters: {
@@ -122,7 +124,7 @@ export const EXTERNAL_MCP_TOOLS_FOR_LLM = [
     },
   },
   {
-    name: "kinga_crm",
+    name: "crm",
     description:
       "Create/update/search contacts/companies in CRM with safe upsert semantics. Input a crm_handoff_package (stringified JSON).",
     parameters: {
@@ -143,9 +145,9 @@ export function llmToolsForPermissions(perms?: Record<string, boolean>) {
   const allow = (k: string) => !!perms?.[k];
   const mcpTools = EXTERNAL_MCP_TOOLS_FOR_LLM.filter((t) => {
     // map tool -> permission key
-    if (t.name === "kinga_search") return allow("kinga_search");
+    if (t.name === "search") return allow("search");
     if (t.name === "email_finder") return allow("email_finder");
-    if (t.name === "kinga_crm") return allow("kinga_crm");
+    if (t.name === "crm") return allow("crm");
     return false;
   });
   return [...INTERNAL_TOOLS, ...mcpTools];

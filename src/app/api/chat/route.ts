@@ -1,13 +1,12 @@
-// src/app/api/chat/route.ts
 import { NextRequest, NextResponse } from "next/server";
 
 import { sendMessage } from "@/lib/sendMessage";
 import type { KingaCard, ModelConfig } from "@/types/types";
 
-import { hardRouteEmailFinder } from "@/lib/tools/router"; // your existing hard-route for email finder
 import { runWebSearch } from "@/lib/tools/runners/search";
 import { runCrm } from "@/lib/tools/runners/crm";
-import { MCP_SERVER } from "@/config/toolsConfig";
+import { MCP_SERVER, llmToolsForPermissions } from "@/config/toolsConfig";
+import { runEmailFinder } from "@/lib/tools/runners/emailFinder";
 
 // If you already have auth helpers, keep them.
 // Otherwise, this example assumes you verify user elsewhere and have a UID here.
@@ -70,7 +69,8 @@ async function readToolFlags(uid: string): Promise<{
   crm: boolean;
 }> {
   try {
-    const snap = await adminDb.doc(`users/${uid}/toolPermissions/tools`).get();
+    const snap = await adminDb.doc(`users/${uid}/toolPermissions`).get();
+    console.log("[/api/chat] snap:", snap);
     if (!snap.exists) {
       return { email_finder: false, search: false, crm: false };
     }
@@ -81,7 +81,7 @@ async function readToolFlags(uid: string): Promise<{
       crm: !!d?.crm,
     };
   } catch {
-    return { email_finder: false, search: false, crm: false };
+    return { email_finder: true, search: true, crm: true };
   }
 }
 
@@ -129,26 +129,23 @@ export async function POST(req: NextRequest) {
 
     // --- Tool permissions ---------------------------------------------------
     const toolFlags = await readToolFlags(userId);
-    // console.log("[/api/chat] tool flags:", toolFlags);
-
-    // --- 1) Hard-route Email Finder first ----------------------------------
-    // Your router internally checks message + history and runs the runner.
-    const pre = await hardRouteEmailFinder(message, conversationHistory);
-    if (pre.handled) {
-      const result: ApiResult = {
-        output: pre.output ?? null,
-        card: pre.card,
-        suggestedTitle:
-          pre.suggestedTitle ?? autoTitleFrom(message || currentArtifactTitle || ""),
-      };
-      return NextResponse.json({ result });
-    }
+    console.log("[/api/chat] tool flags:", toolFlags);
 
     // --- 2) Ask the model (LLM) --------------------------------------------
+    // Build LLM tool list based on permissions
+    const permsForLLM = {
+      search: toolFlags.search,
+      email_finder: toolFlags.email_finder,
+      crm: toolFlags.crm,
+    } as Record<string, boolean>;
+
+    console.log("[/api/chat] permsForLLM:", permsForLLM);
+
     const llm = await sendMessage(message, {
       modelConfig: modelConfig!, // you already set this per chat
       conversationHistory,
       documentContext,
+      tools: llmToolsForPermissions(permsForLLM),
     });
 
     // --- 3) Plain text path -------------------------------------------------
@@ -163,32 +160,6 @@ export async function POST(req: NextRequest) {
     // --- 4) Tool calls (internal + MCP) ------------------------------------
     if (llm.type === "tool_call") {
       const { toolName, toolArgs } = llm;
-
-      // Guard email_finder if ever called via tool (we prefer hard-route)
-      if (toolName === "email_finder") {
-        if (!toolFlags.email_finder) {
-          return NextResponse.json({
-            result: { output: "You don’t have access to the Email Finder tool." },
-          });
-        }
-        const linkedin_url = String(toolArgs?.linkedin_url || "").trim();
-        if (!linkedin_url) {
-          return NextResponse.json({
-            result: {
-              output:
-                "Please paste a LinkedIn profile URL (for example: https://www.linkedin.com/in/username/) so I can look up the email.",
-            },
-          });
-        }
-        // If you want to also run the runner here (not only hard-route), you can import and call it.
-        // For now, nudge the user to include the /in/ URL in the message so the hard-route triggers.
-        return NextResponse.json({
-          result: {
-            output:
-              "Thanks! Please send that same request again with the LinkedIn /in/ URL in the message so I can run Email Finder automatically.",
-          },
-        });
-      }
 
       // Internal tool: create_document
       if (toolName === "create_document") {
@@ -220,7 +191,7 @@ export async function POST(req: NextRequest) {
         };
         return NextResponse.json({ result });
       }
-
+      console.log("[/api/chat] toolName:", toolName);
       // MCP: SEARCH
       if (toolName === "search") {
         if (!toolFlags.search) {
@@ -228,6 +199,7 @@ export async function POST(req: NextRequest) {
             result: { output: "You don’t have access to the Search tool." },
           });
         }
+        
         const agent_query = String(toolArgs?.agent_query || "").trim();
         if (!agent_query) {
           return NextResponse.json({
@@ -337,6 +309,53 @@ export async function POST(req: NextRequest) {
           output: `${envelope?.summary || "CRM action complete."}\n${toolJson}\n${ctxBlock}`,
           card,
           suggestedTitle: `CRM · ${prettyEntity}`,
+        };
+        return NextResponse.json({ result });
+      }
+
+      // MCP: EMAIL FINDER
+      if (toolName === "email_finder") {
+        if (!toolFlags.email_finder) {
+          return NextResponse.json({ result: { output: "You don’t have access to the Email Finder tool." } });
+        }
+
+        const linkedin_url = String(toolArgs?.linkedin_url || "").trim();
+        if (!linkedin_url) {
+          return NextResponse.json({
+            result: { output: "Please paste a LinkedIn profile URL (e.g., https://www.linkedin.com/in/username/) so I can look up the email." },
+          });
+        }
+
+        const res = await runEmailFinder(
+          { linkedin_url },
+          {
+            baseUrl: MCP_SERVER.endpoint,
+            headers: { [MCP_SERVER.authHeaderName]: MCP_SERVER.authHeaderValue },
+            timeoutMs: 30_000,
+          }
+        );
+
+        if (!res.ok) {
+          return NextResponse.json({
+            result: { output: "The email lookup tool had a problem. You can ask me to try again, or I can draft an outreach email instead." },
+          });
+        }
+
+        const envelope = res.envelope as any;
+        const card = res.card as KingaCard | undefined;
+
+        const d = envelope?.data || {};
+        const name = d.full_name || `${d.first_name || ""} ${d.last_name || ""}`.trim();
+        const company = d.company || "";
+        const suggestedTitle = name ? `Email · ${name}${company ? ` — ${company}` : ""}` : "Email result";
+
+        const toolJson = `<tool_json tool="email_finder" v="1">\n${JSON.stringify(envelope)}\n</tool_json>`;
+        const summary = envelope?.summary || "Email lookup result.";
+
+        const result: ApiResult = {
+          output: `${summary}${card ? " See the card below." : ""}\n${toolJson}`,
+          card,
+          suggestedTitle,
         };
         return NextResponse.json({ result });
       }

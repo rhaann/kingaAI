@@ -57,10 +57,11 @@ export async function runEmailFinder(
     const mcp = await callMCPToolSSE({
       baseUrl: ctx.baseUrl,
       headers: ctx.headers,
-      toolName: ctx.mcpToolName ?? "TestEmailFinder", // <-- your MCP sub-tool id
+      toolName: "TestEmailFinder", // <-- your MCP sub-tool id
       args,
       timeoutMs: ctx.timeoutMs ?? 30_000,
     });
+    console.log("HERERERER");
 
     // Surface raw for debugging if needed
     const raw =

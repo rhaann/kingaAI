@@ -1,46 +1,40 @@
-// src/lib/firebaseAdmin.ts
-//
-// Minimal Firebase Admin bootstrap used by server routes.
-// Uses either GOOGLE_APPLICATION_CREDENTIALS or env vars.
 
-import * as admin from "firebase-admin";
+/**
+ * Firebase Admin (server-only)
+ * - Initializes a single Admin app (lazy singleton).
+ * - Exposes `adminAuth`, `adminDb`, and `verifyIdToken(idToken)`.
+ * - Uses `applicationDefault()` creds (GOOGLE_APPLICATION_CREDENTIALS).
+ *   Swap to `cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY!))` if needed.
+ * - Never import this in client code.
+ */
 
-let app: admin.app.App | undefined;
 
-export function getAdminApp(): admin.app.App {
-  if (app) return app;
+import { getApps, initializeApp, applicationDefault } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
 
-  if (admin.apps.length) {
-    app = admin.apps[0]!;
-    return app;
-  }
+const projectId =
+  process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
 
-  // Preferred: GOOGLE_APPLICATION_CREDENTIALS points to a service-account JSON.
-  // Optional fallback: env vars for serverless hosts.
-  const hasKeyEnv =
-    process.env.FIREBASE_PROJECT_ID &&
-    process.env.FIREBASE_CLIENT_EMAIL &&
-    process.env.FIREBASE_PRIVATE_KEY;
-
-  if (hasKeyEnv) {
-    app = admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
-      }),
-    });
-  } else {
-    app = admin.initializeApp(); // uses ADC if available
-  }
-
-  return app;
+if (!projectId) {
+  throw new Error("[firebaseAdmin] Set FIREBASE_PROJECT_ID in .env.local");
 }
 
-export function getFirestore(): admin.firestore.Firestore {
-  return getAdminApp().firestore();
-}
+// Try ADC if available; ok if missing (verifyIdToken only needs projectId).
+let cred: any | undefined;
+try { cred = applicationDefault(); } catch { cred = undefined; }
 
-export function getAuth(): admin.auth.Auth {
-  return getAdminApp().auth();
+const app =
+  getApps()[0] ||
+  initializeApp({
+    projectId,
+    // credential is optional; present if ADC available
+    ...(cred ? { credential: cred } : {}),
+  });
+
+export const adminAuth = getAuth(app);
+export const adminDb = getFirestore(app);
+
+export function verifyIdToken(token: string) {
+  return adminAuth.verifyIdToken(token);
 }
