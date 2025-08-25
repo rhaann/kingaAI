@@ -1,19 +1,91 @@
-/**
- * src/app/api/chat/route.ts — minimal chat API with auth, permissions, and logging
- */
+// src/app/api/chat/route.ts
+import { NextRequest, NextResponse } from "next/server";
 
-import { NextRequest } from "next/server";
-import { sendMessage, LLMResult } from "@/lib/sendMessage";
-import { AVAILABLE_MODELS } from "@/config/modelConfig";
-import type { ModelConfig } from "@/types/types";
-import { hardRouteEmailFinder } from "@/lib/tools/router";
+import { sendMessage } from "@/lib/sendMessage";
+import type { KingaCard, ModelConfig } from "@/types/types";
+
+import { hardRouteEmailFinder } from "@/lib/tools/router"; // your existing hard-route for email finder
+import { runWebSearch } from "@/lib/tools/runners/search";
+import { runCrm } from "@/lib/tools/runners/crm";
+import { MCP_SERVER } from "@/config/toolsConfig";
+
+// If you already have auth helpers, keep them.
+// Otherwise, this example assumes you verify user elsewhere and have a UID here.
 import { getUserFromRequest } from "@/services/authRequest";
 import { adminDb } from "@/services/firebaseAdmin";
-import { FieldValue } from "firebase-admin/firestore";
 
-// -------- Helpers --------
+/** What we return to the client */
+type ApiResult = {
+  output: string | null;
+  card?: KingaCard;
+  artifact?: any;
+  suggestedTitle?: string;
+};
 
-// Extract the tool envelope JSON from assistant output
+/** Title fallback from the latest user message */
+function autoTitleFrom(text: string): string {
+  const cleaned = String(text || "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned) return "New chat";
+  return cleaned.length > 60 ? cleaned.slice(0, 57) + "…" : cleaned;
+}
+
+/** Build a new artifact (internal create_document) */
+function buildNewArtifact(args: any) {
+  const now = Date.now();
+  const title =
+    (typeof args?.title === "string" && args.title.trim()) ||
+    (typeof args?.subject === "string" && args.subject.trim()) ||
+    "Document";
+
+  const content = String(args?.content ?? "");
+  return {
+    id: crypto.randomUUID(),
+    title,
+    type: "document",
+    createdAt: now,
+    updatedAt: now,
+    versions: [{ content, createdAt: now }],
+  };
+}
+
+/** Build an update artifact envelope (client appends single version) */
+function buildUpdateArtifact(currentArtifactId: string | null, args: any) {
+  const now = Date.now();
+  const content = String(args?.content ?? "");
+  return {
+    id: currentArtifactId ?? crypto.randomUUID(),
+    versions: [{ content, createdAt: now }], // client logic: single version => append
+    updatedAt: now,
+  };
+}
+
+/** Read tool permissions from Firestore: users/{uid}/toolPermissions/tools */
+async function readToolFlags(uid: string): Promise<{
+  email_finder: boolean;
+  search: boolean;
+  crm: boolean;
+}> {
+  try {
+    const snap = await adminDb.doc(`users/${uid}/toolPermissions/tools`).get();
+    if (!snap.exists) {
+      return { email_finder: false, search: false, crm: false };
+    }
+    const d = snap.data() as any;
+    return {
+      email_finder: !!d?.email_finder,
+      search: !!d?.search,
+      crm: !!d?.crm,
+    };
+  } catch {
+    return { email_finder: false, search: false, crm: false };
+  }
+}
+
+/** Pull the tool envelope JSON out of assistant output for logging (optional) */
 function extractToolEnvelopeFromOutput(output: string) {
   const m = output?.match(/<tool_json[^>]*>([\s\S]*?)<\/tool_json>/);
   if (!m) return null;
@@ -24,292 +96,279 @@ function extractToolEnvelopeFromOutput(output: string) {
   }
 }
 
-// Returns true/false for users/{uid}/toolPermissions/{toolId}.enabled
-async function isToolEnabled(userId: string, toolId: string) {
-  try {
-    const snap = await adminDb.doc(`users/${userId}/toolPermissions/${toolId}`).get();
-    return Boolean(snap.exists && (snap.data() as any)?.enabled === true);
-  } catch {
-    return false;
-  }
-}
-
-// Unique id for a run log
-function runId() {
-  return (globalThis as any).crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
-}
-
-// Generic logger for non-tool runs (and errors)
-async function logGenericRun(opts: {
-  userId: string;
-  chatId?: string | null;
-  kind: "llm" | "built_in" | "error";
-  status: "ok" | "error";
-  toolId?: string | null;
-  latencyMs?: number | null;
-  note?: string | null;
-}) {
-  const id = runId();
-  await adminDb.doc(`users/${opts.userId}/runs/${id}`).set({
-    traceId: id,
-    userId: opts.userId,
-    chatId: opts.chatId ?? null,
-    kind: opts.kind,
-    status: opts.status,
-    toolId: opts.toolId ?? null,
-    latencyMs: opts.latencyMs ?? null,
-    note: opts.note ?? null,
-    createdAt: FieldValue.serverTimestamp(),
-  });
-}
-
-// Write one run log if a tool envelope is present in output
-async function logToolRun(opts: { userId: string; chatId?: string | null; output: string }) {
-  const env = extractToolEnvelopeFromOutput(opts.output || "");
-  if (!env || !env.toolId) return;
-
-  const traceId = runId();
-  await adminDb.doc(`users/${opts.userId}/runs/${traceId}`).set({
-    traceId,
-    userId: opts.userId,
-    chatId: opts.chatId ?? null,
-    toolId: env.toolId,
-    version: env.version ?? null,
-    status: env.status ?? null,
-    latencyMs: env.meta?.latencyMs ?? null,
-    source: env.meta?.source ?? null,
-    createdAt: FieldValue.serverTimestamp(),
-  });
-}
-
-// -------- Handler --------
-
 export async function POST(req: NextRequest) {
-  // capture chatId for error logging even if parsing/logic fails later
-  let chatId: string | null = null;
-
   try {
     const body = await req.json();
-    const {
-      message,
-      modelConfig,
-      conversationHistory,
-      documentContext,
-      currentArtifactId,
-      currentArtifactTitle,
-    } = body ?? {};
-    chatId = body?.chatId ?? null;
 
-    if (!message || typeof message !== "string") {
-      return new Response("Message is required", { status: 400 });
+    const message: string = body.message ?? "";
+    const modelConfig: ModelConfig | undefined = body.modelConfig;
+    const conversationHistory:
+      | Array<{ role: "user" | "assistant"; content: string }>
+      | undefined = body.conversationHistory;
+    const documentContext: string | undefined = body.documentContext;
+    const currentArtifactId: string | null = body.currentArtifactId ?? null;
+    const currentArtifactTitle: string | undefined = body.currentArtifactTitle;
+    const chatId: string | undefined = body.chatId; // optional, for logging context
+
+    if (!message) {
+      return NextResponse.json(
+        { result: { output: "Message is required.", suggestedTitle: "New chat" } },
+        { status: 200 }
+      );
     }
 
-    // [AUTH] Require a signed-in user
+    // --- AUTH (require a signed-in user) -----------------------------------
     const user = await getUserFromRequest();
     if (!user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+      return NextResponse.json(
+        { result: { output: "Unauthorized. Please sign in.", suggestedTitle: "New chat" } },
+        { status: 200 }
+      );
     }
     const userId = user.uid;
-    const startedAt = Date.now();
 
-    // 1) Hard route: Email Finder (permission-gated)
-    const needsEmailFinder = /linkedin\.com\/in\//i.test(message || "");
-    if (needsEmailFinder) {
-      const allowed = await isToolEnabled(userId, "email_finder");
-      if (!allowed) {
-        return Response.json({
-          result: { output: "You don’t have access to the Email Finder tool." },
-        });
-      }
-    }
-    const routed = await hardRouteEmailFinder(message, conversationHistory);
-    if (routed?.handled) {
-      try {
-        await logToolRun({ userId, chatId, output: routed.output });
-      } catch (e) {
-        console.error("[runs.log] hard-route write failed:", e);
-      }
-      return Response.json({
-        result: {
-          output: routed.output,
-          card: routed.card,
-          suggestedTitle: routed.suggestedTitle,
-        },
-      });
+    // --- Tool permissions ---------------------------------------------------
+    const toolFlags = await readToolFlags(userId);
+    // console.log("[/api/chat] tool flags:", toolFlags);
+
+    // --- 1) Hard-route Email Finder first ----------------------------------
+    // Your router internally checks message + history and runs the runner.
+    const pre = await hardRouteEmailFinder(message, conversationHistory);
+    if (pre.handled) {
+      const result: ApiResult = {
+        output: pre.output ?? null,
+        card: pre.card,
+        suggestedTitle:
+          pre.suggestedTitle ?? autoTitleFrom(message || currentArtifactTitle || ""),
+      };
+      return NextResponse.json({ result });
     }
 
-    // 2) Ask the LLM
-    const selectedModelConfig: ModelConfig =
-      modelConfig && (modelConfig as any).provider ? modelConfig : AVAILABLE_MODELS[2];
-
-    const llm: LLMResult = await sendMessage(message, {
-      modelConfig: selectedModelConfig,
+    // --- 2) Ask the model (LLM) --------------------------------------------
+    const llm = await sendMessage(message, {
+      modelConfig: modelConfig!, // you already set this per chat
       conversationHistory,
       documentContext,
     });
 
-    // 3) Plain text reply
+    // --- 3) Plain text path -------------------------------------------------
     if (llm.type === "text") {
-      try {
-        await logGenericRun({
-          userId,
-          chatId,
-          kind: "llm",
-          status: "ok",
-          latencyMs: Date.now() - startedAt,
-        });
-      } catch (e) {
-        console.error("[runs.log] llm text log failed:", e);
-      }
-
-      return Response.json({
-        result: { output: llm.content || "I'm sorry, I couldn't generate a response." },
-      });
+      const result: ApiResult = {
+        output: llm.content ?? "",
+        suggestedTitle: autoTitleFrom(message || currentArtifactTitle || ""),
+      };
+      return NextResponse.json({ result });
     }
 
-    // 4) Tool calls (built-ins + parameter guard)
+    // --- 4) Tool calls (internal + MCP) ------------------------------------
     if (llm.type === "tool_call") {
       const { toolName, toolArgs } = llm;
 
-      // External email_finder guard — do not run without required params
+      // Guard email_finder if ever called via tool (we prefer hard-route)
       if (toolName === "email_finder") {
-        const allowed = await isToolEnabled(userId, "email_finder");
-        if (!allowed) {
-          return Response.json({
+        if (!toolFlags.email_finder) {
+          return NextResponse.json({
             result: { output: "You don’t have access to the Email Finder tool." },
           });
         }
-
         const linkedin_url = String(toolArgs?.linkedin_url || "").trim();
         if (!linkedin_url) {
-          return Response.json({
+          return NextResponse.json({
             result: {
               output:
                 "Please paste a LinkedIn profile URL (for example: https://www.linkedin.com/in/username/) so I can look up the email.",
             },
           });
         }
-        // We hard-route Email Finder; if the LLM asks here, nudge the user.
-        return Response.json({
+        // If you want to also run the runner here (not only hard-route), you can import and call it.
+        // For now, nudge the user to include the /in/ URL in the message so the hard-route triggers.
+        return NextResponse.json({
           result: {
             output:
-              "Thanks! Please send that same request again (the assistant will run Email Finder automatically when a LinkedIn /in/ URL is included).",
+              "Thanks! Please send that same request again with the LinkedIn /in/ URL in the message so I can run Email Finder automatically.",
           },
         });
       }
 
-      // Built-in: create_document
+      // Internal tool: create_document
       if (toolName === "create_document") {
-        const { title, content } = toolArgs || {};
-        if (!title || !content) {
-          return Response.json({
-            result: { output: "Please provide both a title and content to create a document." },
-          });
-        }
-        const now = Date.now();
-        try {
-          await logGenericRun({
-            userId,
-            chatId,
-            kind: "built_in",
-            status: "ok",
-            toolId: "create_document",
-            latencyMs: Date.now() - startedAt,
-          });
-        } catch (e) {
-          console.error("[runs.log] create_document log failed:", e);
-        }
-        return Response.json({
-          result: {
-            output: `I've created a document for you: "${title}"`,
-            artifact: {
-              id: `artifact-${now}`,
-              title,
-              type: "document",
-              versions: [{ content, createdAt: now }],
-              createdAt: now,
-              updatedAt: now,
-            },
-            suggestedTitle: title,
-          },
-        });
+        const artifact = buildNewArtifact(toolArgs);
+        const result: ApiResult = {
+          output: `I've created a document for you: "${artifact.title}"`,
+          artifact,
+          suggestedTitle: artifact.title || autoTitleFrom(message || ""),
+        };
+        return NextResponse.json({ result });
       }
 
-      // Built-in: update_document
+      // Internal tool: update_document (client appends a single version)
       if (toolName === "update_document") {
-        if (!currentArtifactId || !currentArtifactTitle) {
-          return Response.json({
+        if (!currentArtifactId) {
+          return NextResponse.json({
             result: {
               output:
                 "I need to know which document is open to update it. Please open a document and try again.",
+              suggestedTitle: autoTitleFrom(message || currentArtifactTitle || ""),
             },
           });
         }
-        const { content } = toolArgs || {};
-        if (!content) {
-          return Response.json({
-            result: { output: "Please provide the new, complete content to update the document." },
-          });
-        }
-        const now = Date.now();
-        try {
-          await logGenericRun({
-            userId,
-            chatId,
-            kind: "built_in",
-            status: "ok",
-            toolId: "update_document",
-            latencyMs: Date.now() - startedAt,
-          });
-        } catch (e) {
-          console.error("[runs.log] update_document log failed:", e);
-        }
-        return Response.json({
-          result: {
-            output: "I've updated the document for you.",
-            artifact: {
-              id: currentArtifactId,
-              title: currentArtifactTitle,
-              type: "document",
-              versions: [{ content, createdAt: now }],
-              updatedAt: now,
-            },
-            suggestedTitle: currentArtifactTitle,
-          },
-        });
+        const artifact = buildUpdateArtifact(currentArtifactId, toolArgs);
+        const result: ApiResult = {
+          output: "I've updated the document for you.",
+          artifact,
+          suggestedTitle: currentArtifactTitle || autoTitleFrom(message || ""),
+        };
+        return NextResponse.json({ result });
       }
 
-      // Unknown tool name (not wired)
-      return Response.json({
+      // MCP: SEARCH
+      if (toolName === "search") {
+        if (!toolFlags.search) {
+          return NextResponse.json({
+            result: { output: "You don’t have access to the Search tool." },
+          });
+        }
+        const agent_query = String(toolArgs?.agent_query || "").trim();
+        if (!agent_query) {
+          return NextResponse.json({
+            result: { output: "I need a search query. Try: “Search for <topic>…”" },
+          });
+        }
+
+        const res = await runWebSearch(
+          { agent_query },
+          {
+            baseUrl: MCP_SERVER.endpoint,
+            headers: { [MCP_SERVER.authHeaderName]: MCP_SERVER.authHeaderValue },
+            timeoutMs: 30_000,
+          }
+        );
+
+        if (!res.ok) {
+          return NextResponse.json({
+            result: {
+              output:
+                "Search tool failed. I can still summarize what I know, or you can try rephrasing the query.",
+              suggestedTitle: autoTitleFrom(message || currentArtifactTitle || ""),
+            },
+          });
+        }
+
+        const envelope = res.envelope as any;
+        const card = res.card as KingaCard | undefined;
+
+        const toolJson = `<tool_json tool="search" v="1">\n${JSON.stringify(
+          envelope
+        )}\n</tool_json>`;
+        const ctx = {
+          query: envelope?.data?.query || agent_query,
+          sources: envelope?.meta?.source || [],
+        };
+        const ctxBlock = `<ctx tool="search" v="1">\n${JSON.stringify(ctx)}\n</ctx>`;
+
+        const result: ApiResult = {
+          output: `${envelope?.summary || "Search results ready."}\n${toolJson}\n${ctxBlock}`,
+          card,
+          suggestedTitle:
+            (agent_query.length > 60 ? agent_query.slice(0, 57) + "…" : agent_query) || "Search",
+        };
+        return NextResponse.json({ result });
+      }
+
+      // MCP: CRM
+      if (toolName === "crm") {
+        if (!toolFlags.crm) {
+          return NextResponse.json({
+            result: { output: "You don’t have access to the CRM tool." },
+          });
+        }
+
+        const pkg =
+          typeof toolArgs?.crm_handoff_package === "string"
+            ? toolArgs.crm_handoff_package
+            : JSON.stringify(toolArgs?.crm_handoff_package ?? {});
+
+        if (!pkg) {
+          return NextResponse.json({
+            result: {
+              output:
+                "I need CRM details to proceed (contact/company fields, intent, etc.). Tell me what you want to add/update.",
+              suggestedTitle: autoTitleFrom(message || currentArtifactTitle || ""),
+            },
+          });
+        }
+
+        const res = await runCrm(
+          { crm_handoff_package: pkg },
+          {
+            baseUrl: MCP_SERVER.endpoint,
+            headers: { [MCP_SERVER.authHeaderName]: MCP_SERVER.authHeaderValue },
+            timeoutMs: 30_000,
+          }
+        );
+
+        if (!res.ok) {
+          return NextResponse.json({
+            result: {
+              output:
+                "CRM tool failed after the request. If partial data was prepared, I can still present it—otherwise try again with clearer details.",
+              suggestedTitle: "CRM",
+            },
+          });
+        }
+
+        const envelope = res.envelope as any;
+        const card = res.card as KingaCard | undefined;
+
+        const toolJson = `<tool_json tool="crm" v="1">\n${JSON.stringify(
+          envelope
+        )}\n</tool_json>`;
+        const ctx = {
+          intent: envelope?.data?.intent,
+          entity: envelope?.data?.entity,
+          ids: envelope?.data?.ids,
+          notes: envelope?.data?.notes,
+        };
+        const ctxBlock = `<ctx tool="crm" v="1">\n${JSON.stringify(ctx)}\n</ctx>`;
+
+        const prettyEntity = String(envelope?.data?.entity || "CRM").replace(/_/g, " ");
+
+        const result: ApiResult = {
+          output: `${envelope?.summary || "CRM action complete."}\n${toolJson}\n${ctxBlock}`,
+          card,
+          suggestedTitle: `CRM · ${prettyEntity}`,
+        };
+        return NextResponse.json({ result });
+      }
+
+      // Unknown tool: degrade gracefully
+      return NextResponse.json({
         result: {
-          output: `That tool ('${toolName}') isn't available here yet. Tell me what you need and I’ll help directly.`,
+          output:
+            "That tool isn’t available here yet. Tell me what you need and I’ll help directly.",
+          suggestedTitle: autoTitleFrom(message || currentArtifactTitle || ""),
         },
       });
     }
 
-    return new Response("Invalid result type from sendMessage service.", { status: 500 });
-  } catch (err: any) {
-    console.error("Error in /api/chat:", err?.stack || err);
-    try {
-      const maybeUser = await getUserFromRequest();
-      if (maybeUser?.uid) {
-        await logGenericRun({
-          userId: maybeUser.uid,
-          chatId, // captured earlier
-          kind: "error",
-          status: "error",
-          toolId: null,
-          latencyMs: null,
-          note: String(err?.message || err),
-        });
-      }
-    } catch {}
-    return new Response(JSON.stringify({ error: err?.message || "Unknown error" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
+    // Shouldn’t reach here
+    return NextResponse.json({
+      result: {
+        output: "I couldn’t process that request. Please try again.",
+        suggestedTitle: autoTitleFrom(message || currentArtifactTitle || ""),
+      },
     });
+  } catch (err: any) {
+    console.error("[/api/chat] error:", err);
+    return NextResponse.json(
+      {
+        result: {
+          output:
+            "Something went wrong while processing your request. Please try again.",
+          suggestedTitle: "New chat",
+        },
+      },
+      { status: 200 }
+    );
   }
 }

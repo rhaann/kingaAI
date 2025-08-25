@@ -1,11 +1,19 @@
 /**
- * runners/emailFinder.ts — executes the Email Finder tool end-to-end.
- * - Calls the MCP tool on n8n
- * - Extracts a stable Kinga envelope (and UI card) from varied MCP shapes
- * - Returns a normalized result (ok/envelope/card/ctx/raw/durationMs)
+ * runners/emailFinder.ts — Email Finder (MCP) runner
  *
- * This module does NOT decide when to run; the router/route does.
+ * Purpose:
+ * - Calls the n8n MCP gateway tool "email_finder" with { linkedin_url }.
+ * - Normalizes the response to your standard envelope and returns { ok, envelope, card }.
+ *
+ * Behavior:
+ * - Times out safely (default 30s) and reports "timeout" / "network error".
+ * - Injects latency (ms) into envelope.meta.latencyMs for your route logger.
+ * - Does NOT write logs itself; /api/chat/route parses <tool_json> and logs.
+ *
+ * Inputs:
+ *   runEmailFinder({ linkedin_url }, { baseUrl, headers, timeoutMs, mcpToolName? })
  */
+
 
 import { callMCPToolSSE } from "@/lib/mcpClient";
 import type { KingaCard } from "@/types/types";

@@ -13,9 +13,12 @@ import StructuredCard from "@/components/markdown/structuredCard";
 import type { ExportFormat } from "./exportMenu";
 import { exportToPDF } from "@/services/pdfExport";
 
-// NEW: centralized helpers you created
 import { callChatApi } from "@/lib/client/callChatApi";
 import { buildConversationHistory } from "@/lib/chat/buildConversationHistory";
+
+import { auth, db } from "@/services/firebase";
+import { collection, getDocs } from "firebase/firestore";
+
 
 export function ChatApplication() {
   // Local UI state
@@ -256,8 +259,52 @@ export function ChatApplication() {
     [currentVersionIndex]
   );
 
-  // --- send handler ----------------------------------------------------------
+  type ToolFlags = { email_finder: boolean; search: boolean; crm: boolean };
 
+  async function fetchToolFlags(): Promise<ToolFlags> {
+    const defaults: ToolFlags = { email_finder: false, search: false, crm: false };
+    const uid = auth.currentUser?.uid;
+    try {
+      if (!uid) return defaults;
+  
+      // 1) Try per-user collection: users/{uid}/toolPermissions/{toolId}
+      const perUserCol = collection(db, "users", uid, "toolPermissions");
+      const perUserSnap = await getDocs(perUserCol);
+      if (!perUserSnap.empty) {
+        const out: ToolFlags = { ...defaults };
+        perUserSnap.forEach((d) => {
+          const data = d.data() as Record<string, any>;
+          const on =
+            data.allowed ?? data.enabled ?? data.allow ?? data.value ?? data.on;
+          if (typeof on === "boolean" && (d.id in out)) {
+            // doc ids must be: email_finder, search, crm
+            (out as any)[d.id] = on;
+          }
+        });
+        return out;
+      }
+  
+      // 2) Fallback: global collection toolPermissions/{toolId}
+      const globalCol = collection(db, "toolPermissions");
+      const globalSnap = await getDocs(globalCol);
+      if (!globalSnap.empty) {
+        const out: ToolFlags = { ...defaults };
+        globalSnap.forEach((d) => {
+          const data = d.data() as Record<string, any>;
+          const on =
+            data.allowed ?? data.enabled ?? data.allow ?? data.value ?? data.on;
+          if (typeof on === "boolean" && (d.id in out)) {
+            (out as any)[d.id] = on;
+          }
+        });
+        return out;
+      }
+    } catch (e) {
+      console.warn("[client] fetchToolFlags failed:", e);
+    }
+    return defaults;
+  }
+  
   const handleSend = async (messageContent: string) => {
     if (!messageContent.trim()) return;
 
@@ -296,8 +343,6 @@ export function ChatApplication() {
       .join(", ");
     
 
-
-
     // put this near the top of handleSend (before requestBody)
     function buildDocumentContext(art?: Artifact | null, budget = 12000) {
       if (!art) return undefined;
@@ -325,7 +370,7 @@ export function ChatApplication() {
     }
 
     const documentContext = buildDocumentContext(fallbackArtifact);
-
+    const toolFlags = await fetchToolFlags();
 
     const requestBody = {
       message: userMessage.content,
@@ -334,6 +379,7 @@ export function ChatApplication() {
       documentContext,
       currentArtifactId: fallbackArtifact?.id,
       currentArtifactTitle: fallbackArtifact?.title,
+      toolFlags,
     };
 
     try {

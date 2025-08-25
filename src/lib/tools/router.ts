@@ -1,13 +1,13 @@
 /**
  * src/lib/tools/router.ts
  *
- * Hard-routes Email Finder before the LLM using simple intent + URL checks,
- * uses conversation history to detect repeats, and calls the MCP runner.
- * Fix: only block duplicate URLs after a successful run; if the last
- * assistant message indicates an error, allow an immediate retry.
+ * Hard-route: Email Finder via your n8n MCP gateway.
+ * - No AVAILABLE_TOOLS
+ * - No “same URL” blocking
+ * - Uses env: N8N_MCP_BASE_URL, N8N_AUTH_HEADER_NAME, N8N_AUTH_HEADER_VALUE
+ * - Returns a concise text + optional KingaCard + suggestedTitle
  */
 
-import { AVAILABLE_TOOLS } from "@/lib/toolsConfig";
 import type { KingaCard } from "@/types/types";
 import { runEmailFinder } from "@/lib/tools/runners/emailFinder";
 
@@ -20,134 +20,89 @@ export type RouterResult =
 // LinkedIn profile URL
 const LINKEDIN_IN_RE = /https?:\/\/(?:www\.)?linkedin\.com\/in\/[^\s)]+/i;
 
-// Lookup vs Compose intents
+// “find email” intent (keeps compose/“write an email” out)
 const LOOKUP_INTENT_RE =
   /\b(find|lookup|look\s*up|get|fetch|discover|pull|what(?:'s| is))\b[^\n]{0,40}\b(e[-\s]?mail|email|contact(?:\s*(?:info|information)?)?)\b|\b(e[-\s]?mail|email)\s*address\b/i;
-const COMPOSE_INTENT_RE =
-  /\b(write|draft|compose|polish|revise|improve|send)\b[^\n]{0,40}\b(e[-\s]?mail|email)\b/i;
 
-// Simple failure window: 2 fails within 5m -> say tool is down
-const FAIL_TTL_MS = 5 * 60 * 1000;
-const failMap = new Map<string, { count: number; ts: number }>();
-function bumpFail(key: string): number {
-  const now = Date.now();
-  const prev = failMap.get(key);
-  if (!prev || now - prev.ts > FAIL_TTL_MS) {
-    failMap.set(key, { count: 1, ts: now });
-    return 1;
-  }
-  const next = { count: prev.count + 1, ts: now };
-  failMap.set(key, next);
-  return next.count;
-}
-function clearFail(key: string) {
-  failMap.delete(key);
+/** Small helper so we can log config problems without leaking secrets */
+function debugConfig(): { ok: boolean; reason?: string; base?: string; headerName?: string } {
+  const base = process.env.N8N_MCP_BASE_URL;
+  const headerName = process.env.N8N_AUTH_HEADER_NAME;
+  const headerValue = process.env.N8N_AUTH_HEADER_VALUE;
+
+  if (!base) return { ok: false, reason: "N8N_MCP_BASE_URL missing" };
+  if (!headerName) return { ok: false, reason: "N8N_AUTH_HEADER_NAME missing", base };
+  if (!headerValue) return { ok: false, reason: "N8N_AUTH_HEADER_VALUE missing", base, headerName };
+  return { ok: true, base, headerName };
 }
 
 export async function hardRouteEmailFinder(
   message: string,
-  conversationHistory?: SimpleTurn[]
+  _conversationHistory?: SimpleTurn[]
 ): Promise<RouterResult> {
   const text = String(message || "");
 
-  const wantsLookup = LOOKUP_INTENT_RE.test(text);
-  const wantsCompose = COMPOSE_INTENT_RE.test(text);
+  // Not a lookup → let the LLM handle it
+  if (!LOOKUP_INTENT_RE.test(text)) return { handled: false };
 
-  // If the user is asking to write/compose an email, don't hard-route.
-  if (wantsCompose && !wantsLookup) return { handled: false };
-  if (!wantsLookup) return { handled: false };
-
-  // Require a LinkedIn URL
-  const urlMatch = text.match(LINKEDIN_IN_RE);
-  const linkedin_url = urlMatch?.[0];
+  // Need a LinkedIn URL
+  const linkedin_url = text.match(LINKEDIN_IN_RE)?.[0];
   if (!linkedin_url) {
     return {
       handled: true,
       output:
-        "Please paste a LinkedIn profile URL (for example: https://www.linkedin.com/in/username/) so I can look up the email.",
+        "Please paste the LinkedIn profile URL (e.g., https://www.linkedin.com/in/username/) so I can look up the email.",
     };
   }
 
-  // Duplicate guard: only block if previous turn was a *successful* run
-  const lastUserUrl = conversationHistory
-    ?.slice()
-    .reverse()
-    .find((t) => t.role === "user" && LINKEDIN_IN_RE.test(t.content))
-    ?.content.match(LINKEDIN_IN_RE)?.[0];
-
-  const lastAssistantText =
-    conversationHistory?.slice().reverse().find((t) => t.role === "assistant")?.content || "";
-
-  // If last assistant said there was an error, allow retry without blocking
-  const prevWasError = /isn['’]?t configured|tool failed|appears to be down|lookup tool/i.test(
-    lastAssistantText
-  );
-  const forcedRetry = /(?:\bretry\b|\bagain\b)/i.test(text);
-
-  if (lastUserUrl && lastUserUrl === linkedin_url && !forcedRetry && !prevWasError) {
+  // Config check
+  const cfg = debugConfig();
+  if (!cfg.ok) {
+    console.warn("[email_finder] not configured:", cfg.reason);
     return {
       handled: true,
       output:
-        "That looks like the same LinkedIn URL as before. Please paste a different profile link, or say “retry” to run it again.",
+        "The email finder isn’t available right now. I can still draft an outreach email if you’d like.",
     };
   }
 
-  // MCP gateway tool (your n8n MCP server)
-  const agent = AVAILABLE_TOOLS.find((t) => t.name === "kinga_agent");
-  if (!agent || agent.executionType !== "n8n" || !agent.authentication?.secret) {
-    return {
-      handled: true,
-      output:
-        "Email lookup isn’t configured in this environment. Please provide a different task, or try again later.",
-    };
-  }
-
+  // Call your existing runner exactly once
   const res = await runEmailFinder(
     { linkedin_url },
     {
-      baseUrl: agent.endpoint,
-      headers: { [agent.authentication.headerName]: agent.authentication.secret! },
+      baseUrl: process.env.N8N_MCP_BASE_URL!,
+      headers: {
+        [process.env.N8N_AUTH_HEADER_NAME!]: process.env.N8N_AUTH_HEADER_VALUE!,
+      },
       timeoutMs: 30_000,
-      // mcpToolName: "TestEmailFinder", // set if your MCP tool id differs
+      // mcpToolName: "EmailFinder" // only if your n8n MCP names it differently
     }
   );
 
   if (!res.ok) {
-    const n = bumpFail(linkedin_url);
-    if (n >= 2) {
-      return {
-        handled: true,
-        output:
-          "The email lookup tool appears to be down. Please try again later or provide a different task.",
-      };
-    }
+    console.warn("[email_finder] runner failed:", res.error || "unknown error");
     return {
       handled: true,
       output:
-        "The email lookup tool failed. You can say “retry” to try again, or paste a different LinkedIn profile URL.",
+        "The email lookup tool had a problem. You can ask me to try again, or I can draft an outreach email instead.",
     };
   }
 
-  clearFail(linkedin_url);
-
-  const envelope = res.envelope as any;
+  // Shape result text + card + suggested title
+  const envelope: any = res.envelope;
   const card = res.card as KingaCard | undefined;
-  const d = envelope?.data || {};
-  const ctx = {
-    name: d.full_name || `${d.first_name || ""} ${d.last_name || ""}`.trim(),
-    email: d.email || "",
-    company: d.company || "",
-    linkedin: d.linkedin_url || linkedin_url,
-  };
 
+  const d = envelope?.data || {};
+  const name = d.full_name || `${d.first_name || ""} ${d.last_name || ""}`.trim();
+  const company = d.company || "";
+  const summary = envelope?.summary || "Email lookup result.";
+  const suggestedTitle = name ? `Email · ${name}${company ? ` — ${company}` : ""}` : "Email result";
+
+  // Include a machine-readable block the LLM can use on the next turn (optional)
   const toolJsonBlock =
     `<tool_json tool="email_finder" v="1">\n${JSON.stringify(envelope)}\n</tool_json>`;
-  const ctxBlock = `<ctx tool="email_finder" v="1">\n${JSON.stringify(ctx)}\n</ctx>`;
-  const output = `${envelope?.summary || "Result."} See card below.\n${toolJsonBlock}\n${ctxBlock}`;
 
-  const suggestedTitle = ctx.name
-    ? `Email · ${ctx.name}${ctx.company ? ` — ${ctx.company}` : ""}`
-    : "Email result";
+  const output = `${summary}${card ? " See the card below." : ""}\n${toolJsonBlock}`;
 
   return { handled: true, output, card, suggestedTitle };
 }
