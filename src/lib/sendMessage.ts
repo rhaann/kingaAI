@@ -13,6 +13,7 @@ interface SendMessageOptions {
   documentContext?: string; // present when a document is open
   /** The exact tool list this request is allowed to use (already filtered by permissions). */
   tools?: AITool[];
+  disableNudges?: boolean; // NEW
 }
 
 // -----------------------------
@@ -75,7 +76,8 @@ export async function sendMessage(
     modelConfig,
     conversationHistory,
     documentContext,
-    allowedTools
+    allowedTools,
+    options.disableNudges
   );
 }
 
@@ -87,7 +89,8 @@ async function sendToOpenAI(
   modelConfig: ModelConfig,
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
   documentContext: string | undefined,
-  allowedTools: AITool[]
+  allowedTools: AITool[],
+  disableNudges: boolean | undefined
 ): Promise<LLMResult> {
   if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not defined.");
 
@@ -118,17 +121,20 @@ async function sendToOpenAI(
   const req: OpenAI.Chat.Completions.ChatCompletionCreateParams = {
     model: modelConfig.id,
     messages,
-    temperature: 0.7,
+    temperature: 0,
     tools,
     parallel_tool_calls: false,
     tool_choice: "auto",
   };
 
   // Nudge when obvious
-  if (wantsUpdate) {
-    req.tool_choice = { type: "function", function: { name: "update_document" } };
-  } else if (wantsCreate) {
-    req.tool_choice = { type: "function", function: { name: "create_document" } };
+  if (!disableNudges) {
+    const available = new Set(allowedTools.map(t => t.name));
+    if (wantsUpdate && available.has("update_document")) {
+      req.tool_choice = { type: "function", function: { name: "update_document" } };
+    } else if (wantsCreate && available.has("create_document")) {
+      req.tool_choice = { type: "function", function: { name: "create_document" } };
+    }
   }
 
   const completion = await openai.chat.completions.create(req);

@@ -74,11 +74,9 @@ async function readToolFlags(userId: string): Promise<{ [key: string]: boolean }
     .doc(userId)
     .collection("toolPermissions");
 
-    console.log("[/api/chat] permissionsRef:", permissionsRef);
 
   // Query by document ID for the tools we care about
   const q = permissionsRef.where(FieldPath.documentId(), "in", toolIds);
-  console.log("[/api/chat] q:", q);
 
   // Default: fail closed
   const permissionsStatus: { [key: string]: boolean } = {
