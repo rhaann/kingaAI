@@ -61,7 +61,6 @@ export async function runEmailFinder(
       args,
       timeoutMs: ctx.timeoutMs ?? 30_000,
     });
-    console.log("HERERERER");
 
     // Surface raw for debugging if needed
     const raw =

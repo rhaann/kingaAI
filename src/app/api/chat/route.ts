@@ -96,6 +96,61 @@ function extractToolEnvelopeFromOutput(output: string) {
   }
 }
 
+async function synthesizeWithLLM({
+  envelope,
+  message,
+  modelConfig,
+  conversationHistory = [],
+  documentContext,
+}: {
+  envelope: any;
+  message: string;
+  modelConfig: ModelConfig;
+  conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
+  documentContext?: string;
+}): Promise<string> {
+  const synthesisPrompt =
+    "You are helping the user. Interpret the tool results below and produce a concise, helpful answer. " +
+    "If sources are present (envelope.meta.source), cite them briefly. Avoid dumping raw JSON.\n\n" +
+    `<tool_json v="1">\n${JSON.stringify(envelope)}\n</tool_json>`;
+
+  const llm = await sendMessage(synthesisPrompt, {
+    modelConfig,
+    conversationHistory,
+    documentContext,
+    tools: [], // disable tools on the synthesis pass
+  });
+
+  return llm.type === "text" ? (llm.content ?? "") : "Here’s what I found.";
+}
+
+/** Ask the LLM to propose a short chat title (tools disabled). */
+async function generateChatTitleWithLLM({
+  message,
+  modelConfig,
+  envelope,
+}: {
+  message: string;
+  modelConfig: ModelConfig;
+  envelope?: any;
+}): Promise<string | null> {
+  const toolSummary = envelope?.summary ? `\n\nTool summary:\n${envelope.summary}` : "";
+  const prompt =
+    "Generate a concise, descriptive chat title (max 6 words). " +
+    "Output ONLY the title with no quotes or punctuation.\n\n" +
+    `User request:\n${message}${toolSummary}`;
+
+  const llm = await sendMessage(prompt, {
+    modelConfig,
+    conversationHistory: [],
+    documentContext: undefined,
+    tools: [],
+  });
+  if (llm.type !== "text") return null;
+  const t = (llm.content || "").trim();
+  return t ? (t.length > 60 ? t.slice(0, 60) : t) : null;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -148,11 +203,13 @@ export async function POST(req: NextRequest) {
       tools: llmToolsForPermissions(permsForLLM),
     });
 
+    const llmTitle = await generateChatTitleWithLLM({ message, modelConfig: modelConfig! });
+
     // --- 3) Plain text path -------------------------------------------------
     if (llm.type === "text") {
       const result: ApiResult = {
         output: llm.content ?? "",
-        suggestedTitle: autoTitleFrom(message || currentArtifactTitle || ""),
+        suggestedTitle: llmTitle || autoTitleFrom(message || currentArtifactTitle || ""),
       };
       return NextResponse.json({ result });
     }
@@ -167,7 +224,7 @@ export async function POST(req: NextRequest) {
         const result: ApiResult = {
           output: `I've created a document for you: "${artifact.title}"`,
           artifact,
-          suggestedTitle: artifact.title || autoTitleFrom(message || ""),
+          suggestedTitle: llmTitle || artifact.title || autoTitleFrom(message || ""),
         };
         return NextResponse.json({ result });
       }
@@ -179,7 +236,7 @@ export async function POST(req: NextRequest) {
             result: {
               output:
                 "I need to know which document is open to update it. Please open a document and try again.",
-              suggestedTitle: autoTitleFrom(message || currentArtifactTitle || ""),
+              suggestedTitle: llmTitle || autoTitleFrom(message || currentArtifactTitle || ""),
             },
           });
         }
@@ -187,7 +244,7 @@ export async function POST(req: NextRequest) {
         const result: ApiResult = {
           output: "I've updated the document for you.",
           artifact,
-          suggestedTitle: currentArtifactTitle || autoTitleFrom(message || ""),
+          suggestedTitle: llmTitle || currentArtifactTitle || autoTitleFrom(message || ""),
         };
         return NextResponse.json({ result });
       }
@@ -221,7 +278,7 @@ export async function POST(req: NextRequest) {
             result: {
               output:
                 "Search tool failed. I can still summarize what I know, or you can try rephrasing the query.",
-              suggestedTitle: autoTitleFrom(message || currentArtifactTitle || ""),
+              suggestedTitle: llmTitle || autoTitleFrom(message || currentArtifactTitle || ""),
             },
           });
         }
@@ -229,20 +286,21 @@ export async function POST(req: NextRequest) {
         const envelope = res.envelope as any;
         const card = res.card as KingaCard | undefined;
 
-        const toolJson = `<tool_json tool="search" v="1">\n${JSON.stringify(
-          envelope
-        )}\n</tool_json>`;
-        const ctx = {
-          query: envelope?.data?.query || agent_query,
-          sources: envelope?.meta?.source || [],
-        };
-        const ctxBlock = `<ctx tool="search" v="1">\n${JSON.stringify(ctx)}\n</ctx>`;
+        const output = await synthesizeWithLLM({
+          envelope,
+          message,
+          modelConfig: modelConfig!,
+          conversationHistory,
+          documentContext,
+        });
 
         const result: ApiResult = {
-          output: `${envelope?.summary || "Search results ready."}\n${toolJson}\n${ctxBlock}`,
+          output,
           card,
           suggestedTitle:
-            (agent_query.length > 60 ? agent_query.slice(0, 57) + "…" : agent_query) || "Search",
+            llmTitle ||
+            (agent_query.length > 60 ? agent_query.slice(0, 57) + "…" : agent_query) ||
+            "Search",
         };
         return NextResponse.json({ result });
       }
@@ -265,7 +323,7 @@ export async function POST(req: NextRequest) {
             result: {
               output:
                 "I need CRM details to proceed (contact/company fields, intent, etc.). Tell me what you want to add/update.",
-              suggestedTitle: autoTitleFrom(message || currentArtifactTitle || ""),
+              suggestedTitle: llmTitle || autoTitleFrom(message || currentArtifactTitle || ""),
             },
           });
         }
@@ -284,7 +342,7 @@ export async function POST(req: NextRequest) {
             result: {
               output:
                 "CRM tool failed after the request. If partial data was prepared, I can still present it—otherwise try again with clearer details.",
-              suggestedTitle: "CRM",
+              suggestedTitle: llmTitle || "CRM",
             },
           });
         }
@@ -292,23 +350,20 @@ export async function POST(req: NextRequest) {
         const envelope = res.envelope as any;
         const card = res.card as KingaCard | undefined;
 
-        const toolJson = `<tool_json tool="crm" v="1">\n${JSON.stringify(
-          envelope
-        )}\n</tool_json>`;
-        const ctx = {
-          intent: envelope?.data?.intent,
-          entity: envelope?.data?.entity,
-          ids: envelope?.data?.ids,
-          notes: envelope?.data?.notes,
-        };
-        const ctxBlock = `<ctx tool="crm" v="1">\n${JSON.stringify(ctx)}\n</ctx>`;
+        const output = await synthesizeWithLLM({
+          envelope,
+          message,
+          modelConfig: modelConfig!,
+          conversationHistory,
+          documentContext,
+        });
 
         const prettyEntity = String(envelope?.data?.entity || "CRM").replace(/_/g, " ");
 
         const result: ApiResult = {
-          output: `${envelope?.summary || "CRM action complete."}\n${toolJson}\n${ctxBlock}`,
+          output,
           card,
-          suggestedTitle: `CRM · ${prettyEntity}`,
+          suggestedTitle: llmTitle || `CRM · ${prettyEntity}`,
         };
         return NextResponse.json({ result });
       }
@@ -344,18 +399,18 @@ export async function POST(req: NextRequest) {
         const envelope = res.envelope as any;
         const card = res.card as KingaCard | undefined;
 
-        const d = envelope?.data || {};
-        const name = d.full_name || `${d.first_name || ""} ${d.last_name || ""}`.trim();
-        const company = d.company || "";
-        const suggestedTitle = name ? `Email · ${name}${company ? ` — ${company}` : ""}` : "Email result";
-
-        const toolJson = `<tool_json tool="email_finder" v="1">\n${JSON.stringify(envelope)}\n</tool_json>`;
-        const summary = envelope?.summary || "Email lookup result.";
+        const output = await synthesizeWithLLM({
+          envelope,
+          message,
+          modelConfig: modelConfig!,
+          conversationHistory,
+          documentContext,
+        });
 
         const result: ApiResult = {
-          output: `${summary}${card ? " See the card below." : ""}\n${toolJson}`,
+          output,
           card,
-          suggestedTitle,
+          suggestedTitle: llmTitle || "Email result",
         };
         return NextResponse.json({ result });
       }
@@ -365,7 +420,7 @@ export async function POST(req: NextRequest) {
         result: {
           output:
             "That tool isn’t available here yet. Tell me what you need and I’ll help directly.",
-          suggestedTitle: autoTitleFrom(message || currentArtifactTitle || ""),
+          suggestedTitle: llmTitle || autoTitleFrom(message || currentArtifactTitle || ""),
         },
       });
     }
@@ -374,7 +429,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       result: {
         output: "I couldn’t process that request. Please try again.",
-        suggestedTitle: autoTitleFrom(message || currentArtifactTitle || ""),
+        suggestedTitle: llmTitle || autoTitleFrom(message || currentArtifactTitle || ""),
       },
     });
   } catch (err: any) {

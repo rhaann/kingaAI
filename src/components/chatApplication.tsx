@@ -105,7 +105,6 @@ export function ChatApplication() {
     };
     const next = [...messages, msg];
     setMessages(next);
-    // NOTE: if you later switch to subcollections, change this to append only the new message
     saveMessagesToCurrentChat(next);
   }
 
@@ -391,13 +390,13 @@ export function ChatApplication() {
       console.log("[chatApplication] result:", result);
 
       // Update chat title if server suggested one
-      if (result?.suggestedTitle && chatId) {
-        if (typeof updateChatTitle === "function") {
-          await updateChatTitle(chatId, result.suggestedTitle);
-        } else if (typeof updateChat === "function") {
-          await updateChat(chatId, { title: result.suggestedTitle });
-        }
-      }
+      // if (result?.suggestedTitle && chatId) {
+      //   if (typeof updateChatTitle === "function") {
+      //     await updateChatTitle(chatId, result.suggestedTitle);
+      //   } else if (typeof updateChat === "function") {
+      //     await updateChat(chatId, { title: result.suggestedTitle });
+      //   }
+      // }
 
       // 5) Build assistant message
       let aiMessage: Message = {
@@ -448,8 +447,12 @@ export function ChatApplication() {
       // 7) Replace thinking with final assistant message and persist
       const finalMessages = [...updatedMessages, aiMessage];
       setMessages(finalMessages);
-      // NOTE: if you later migrate to subcollections, change this to append just the two new messages
-      saveMessagesToCurrentChat(finalMessages);
+      saveMessagesToCurrentChat(finalMessages, { suggestedTitle: result.suggestedTitle });
+
+
+
+
+
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "An error occurred.";
       setMessages((prev) =>
