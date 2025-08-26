@@ -177,9 +177,14 @@ async function sendToOpenAI(
   return { type: "text", content: raw || null };
 }
 
-function safeParseArgs(jsonLike: string): unknown {
+function safeParseArgs(jsonLike: string):  Record<string, unknown>  {
   try {
-    return JSON.parse(jsonLike);
+    const parsed = JSON.parse(jsonLike);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    // If it's an array or primitive, wrap it so callers can still access it.
+    return { value: parsed };
   } catch {
     return { raw: jsonLike };
   }
