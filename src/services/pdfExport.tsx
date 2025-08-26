@@ -7,7 +7,7 @@ export interface PDFExportOptions {
 }
 
 export async function exportToPDF(options: PDFExportOptions): Promise<void> {
-  const { jsPDF } = await import('jspdf'); // <-- dynamic import (browser only)
+  const { default: jsPDF } = await import('jspdf'); // <-- dynamic import (browser only)
 
   const { title, content, fontSize = 10, margin = 25 } = options;
 
@@ -97,7 +97,7 @@ export async function exportToPDF(options: PDFExportOptions): Promise<void> {
         const bold = i % 2 === 1;
         pdf.setFont('helvetica', bold ? 'bold' : 'normal');
         const wrapped = pdf.splitTextToSize(parts[i], maxLineWidth - (x - margin));
-        wrapped.forEach((w, idx) => {
+        wrapped.forEach((w: string, idx: number) => {
           if (idx > 0) {
             yPosition += fontSize * 0.85;
             x = margin;
@@ -123,7 +123,17 @@ export async function exportToPDF(options: PDFExportOptions): Promise<void> {
   }
 
   // Footer
-  const totalPages = pdf.getNumberOfPages();
+  type JsPdfPages = {
+    getNumberOfPages?: () => number;
+    internal?: { getNumberOfPages?: () => number };
+  };
+
+  const pageAware = pdf as unknown as JsPdfPages;
+  const totalPages =
+    pageAware.getNumberOfPages?.() ??
+    pageAware.internal?.getNumberOfPages?.() ??
+    1;
+
   for (let i = 1; i <= totalPages; i++) {
     pdf.setPage(i);
     pdf.setFontSize(8);
