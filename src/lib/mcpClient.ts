@@ -8,7 +8,7 @@ type MCPRequest = {
 };
 
 type MCPResult =
-  | { jsonrpc: "2.0"; id: string; result: any }
+  | { jsonrpc: "2.0"; id: string; result: unknown }
   | { jsonrpc: "2.0"; id: string | null; error: { code: number; message: string } };
 
 function sleep(ms: number) {

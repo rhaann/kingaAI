@@ -9,7 +9,7 @@ import type { KingaCard } from "@/types/types";
 
 
 export type CacheEntry = {
-  ctx: any;               // compact facts for <ctx> block
+  ctx: Record<string, string>;               // compact facts for <ctx> block
   card?: KingaCard;       // UI card to re-show if we skip duplicate
   ts: number;             // timestamp (ms)
   status: "ok" | "error"; // execution status we observed

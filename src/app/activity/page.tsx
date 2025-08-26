@@ -43,7 +43,8 @@ export default function ActivityPage() {
       try {
         const permRef = doc(db, "users", uid, "featurePermissions", "activity");
         const snap = await getDoc(permRef);
-        const ok = !!(snap.exists() && (snap.data() as any)?.enabled === true);
+        const ok = !!(snap.exists() && (snap.data() as { enabled?: boolean })?.enabled);
+
         setAllowed(ok);
 
         if (!ok) {
@@ -57,7 +58,10 @@ export default function ActivityPage() {
         const q = query(runsRef, orderBy("createdAt", "desc"), limit(100));
         const unsub = onSnapshot(q, (ss) => {
           const list: RunRow[] = [];
-          ss.forEach((d) => list.push({ id: d.id, ...(d.data() as any) }));
+          ss.forEach((d) => {
+            list.push({ id: d.id, ...d.data() } as RunRow);
+          });
+          
           setRows(list);
           setLoading(false);
         });
@@ -142,7 +146,7 @@ export default function ActivityPage() {
                       {r.note && <div className="text-xs text-muted-foreground mt-0.5">{r.note}</div>}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
-                      {status === "ok" ? "✅ Success" : "⚠️ Error"}
+                      {status === "ok" ? "Success" : "Error"}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.latencyMs ?? "—"} ms</td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.chatId ?? "—"}</td>

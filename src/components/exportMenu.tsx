@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
-import { ChevronDown, FileText, Download, Mail, Cloud, Loader2, ExternalLink, Check } from 'lucide-react';
+import { ChevronDown, FileText, Download, Mail, Loader2, Check } from 'lucide-react';
 import { Artifact } from '@/types/types';
 import { useGoogleDrive } from '@/context/googleDriveContext';
 
 export type ExportFormat = 'pdf' | 'word' | 'markdown' | 'text' | 'email' | 'google-drive';
+type ArtifactLike = Artifact & { content?: string };
+
 
 interface ExportMenuProps {
-  artifact: Artifact;
-  onExport: (format: ExportFormat, artifact: Artifact) => void;
+  artifact: ArtifactLike;
+  onExport: (format: ExportFormat, artifact: ArtifactLike) => void;
 }
 
 interface ExportOption {
@@ -97,17 +99,17 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({ artifact, onExport }) =>
     }
   };
 
-  const copyDriveUrl = () => {
-    if (driveUrl) {
-      navigator.clipboard.writeText(driveUrl);
-    }
-  };
+  // const copyDriveUrl = () => {
+  //   if (driveUrl) {
+  //     navigator.clipboard.writeText(driveUrl);
+  //   }
+  // };
 
-  const openInDrive = () => {
-    if (driveUrl) {
-      window.open(driveUrl, '_blank');
-    }
-  };
+  // const openInDrive = () => {
+  //   if (driveUrl) {
+  //     window.open(driveUrl, '_blank');
+  //   }
+  // };
 
   return (
     <div className="relative">

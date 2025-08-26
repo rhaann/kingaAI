@@ -17,6 +17,14 @@ export type RouterResult =
   | { handled: true; output: string; card?: KingaCard; suggestedTitle?: string }
   | { handled: false };
 
+
+  type EmailFinderData = {
+    full_name?: string;
+    first_name?: string;
+    last_name?: string;
+    company?: string;
+  };
+
 // LinkedIn profile URL
 const LINKEDIN_IN_RE = /https?:\/\/(?:www\.)?linkedin\.com\/in\/[^\s)]+/i;
 
@@ -89,7 +97,7 @@ export async function hardRouteEmailFinder(
   }
 
   // Shape result text + card + suggested title
-  const envelope: any = res.envelope;
+  const envelope = res.envelope as { data?: EmailFinderData; summary?: string } | null | undefined;
   const card = res.card as KingaCard | undefined;
 
   const d = envelope?.data || {};

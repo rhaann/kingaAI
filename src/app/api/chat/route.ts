@@ -1,28 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
-
 import { sendMessage } from "@/lib/sendMessage";
 import type { KingaCard, ModelConfig } from "@/types/types";
-
 import { runWebSearch } from "@/lib/tools/runners/search";
 import { runCrm } from "@/lib/tools/runners/crm";
 import { MCP_SERVER, llmToolsForPermissions } from "@/config/toolsConfig";
 import { runEmailFinder } from "@/lib/tools/runners/emailFinder";
-
-
-
-// If you already have auth helpers, keep them.
-// Otherwise, this example assumes you verify user elsewhere and have a UID here.
 import { getUserFromRequest } from "@/services/authRequest";
 import { adminDb } from "@/services/firebaseAdmin";
 import { FieldPath } from "firebase-admin/firestore";
+
+
+
+type ArtifactEnvelope = {
+  id: string;
+  title?: string;
+  type?: string;
+  createdAt?: number;
+  updatedAt?: number;
+  versions?: Array<{ content: string; createdAt: number }>;
+};
+
+type ToolEnvelope = Record<string, unknown> & {
+  summary?: string;
+  data?: { entity?: string };
+};
+
 
 /** What we return to the client */
 type ApiResult = {
   output: string | null;
   card?: KingaCard;
-  artifact?: any;
+  artifact?: ArtifactEnvelope; 
   suggestedTitle?: string;
 };
+
 
 /** Title fallback from the latest user message */
 function autoTitleFrom(text: string): string {
@@ -36,15 +47,15 @@ function autoTitleFrom(text: string): string {
 }
 
 /** Build a new artifact (internal create_document) */
-function buildNewArtifact(args: any) {
+function buildNewArtifact(args: { title?: unknown; subject?: unknown; content?: unknown }): ArtifactEnvelope {
   const now = Date.now();
   const title =
     (typeof args?.title === "string" && args.title.trim()) ||
     (typeof args?.subject === "string" && args.subject.trim()) ||
     "Document";
 
-  const content = String(args?.content ?? "");
-  return {
+    const content = typeof args?.content === "string" ? args.content : String(args?.content ?? "");
+    return {
     id: crypto.randomUUID(),
     title,
     type: "document",
@@ -55,9 +66,9 @@ function buildNewArtifact(args: any) {
 }
 
 /** Build an update artifact envelope (client appends single version) */
-function buildUpdateArtifact(currentArtifactId: string | null, args: any) {
+function buildUpdateArtifact(currentArtifactId: string | null, args: { content?: unknown }): ArtifactEnvelope {
   const now = Date.now();
-  const content = String(args?.content ?? "");
+  const content = typeof args?.content === "string" ? args.content : String(args?.content ?? "");
   return {
     id: currentArtifactId ?? crypto.randomUUID(),
     versions: [{ content, createdAt: now }], // client logic: single version => append
@@ -86,10 +97,11 @@ async function readToolFlags(userId: string): Promise<{ [key: string]: boolean }
   };
 
   // Helper: tolerate different boolean field names
-  const pickBool = (data: any): boolean | undefined => {
+  const pickBool = (data: Record<string, unknown>): boolean | undefined => {
     const candidates = ["enabled", "allowed", "allow", "value", "on", "active", "isEnabled"];
     for (const k of candidates) {
-      if (typeof data?.[k] === "boolean") return data[k];
+      const v = data?.[k];
+      if (typeof v === "boolean") return v;
     }
     return undefined;
   };
@@ -98,7 +110,7 @@ async function readToolFlags(userId: string): Promise<{ [key: string]: boolean }
     const querySnapshot = await q.get();
 
     querySnapshot.forEach((doc) => {
-      const data = doc.data() as Record<string, any>;
+      const data = doc.data() as Record<string, unknown>;
       const v = pickBool(data);
       if (typeof v === "boolean" && doc.id in permissionsStatus) {
         permissionsStatus[doc.id] = v;
@@ -114,27 +126,14 @@ async function readToolFlags(userId: string): Promise<{ [key: string]: boolean }
 }
 
 
-
-
-/** Pull the tool envelope JSON out of assistant output for logging (optional) */
-function extractToolEnvelopeFromOutput(output: string) {
-  const m = output?.match(/<tool_json[^>]*>([\s\S]*?)<\/tool_json>/);
-  if (!m) return null;
-  try {
-    return JSON.parse(m[1]);
-  } catch {
-    return null;
-  }
-}
-
 async function synthesizeWithLLM({
   envelope,
-  message,
+  message: _message,
   modelConfig,
   conversationHistory = [],
   documentContext,
 }: {
-  envelope: any;
+  envelope: unknown;
   message: string;
   modelConfig: ModelConfig;
   conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
@@ -163,7 +162,7 @@ async function generateChatTitleWithLLM({
 }: {
   message: string;
   modelConfig: ModelConfig;
-  envelope?: any;
+  envelope?: ToolEnvelope;
 }): Promise<string | null> {
   const toolSummary = envelope?.summary ? `\n\nTool summary:\n${envelope.summary}` : "";
   const prompt =
@@ -194,7 +193,7 @@ export async function POST(req: NextRequest) {
     const documentContext: string | undefined = body.documentContext;
     const currentArtifactId: string | null = body.currentArtifactId ?? null;
     const currentArtifactTitle: string | undefined = body.currentArtifactTitle;
-    const chatId: string | undefined = body.chatId; // optional, for logging context
+    const _chatId: string | undefined = body.chatId; 
 
     if (!message) {
       return NextResponse.json(
@@ -279,7 +278,7 @@ export async function POST(req: NextRequest) {
         };
         return NextResponse.json({ result });
       }
-      console.log("[/api/chat] toolName:", toolName);
+
       // MCP: SEARCH
       if (toolName === "search") {
         if (!toolFlags.search) {
@@ -314,7 +313,7 @@ export async function POST(req: NextRequest) {
           });
         }
 
-        const envelope = res.envelope as any;
+        const envelope = res.envelope as ToolEnvelope;
         const card = res.card as KingaCard | undefined;
 
         const output = await synthesizeWithLLM({
@@ -378,7 +377,7 @@ export async function POST(req: NextRequest) {
           });
         }
 
-        const envelope = res.envelope as any;
+        const envelope = res.envelope as ToolEnvelope;
         const card = res.card as KingaCard | undefined;
 
         const output = await synthesizeWithLLM({
@@ -427,7 +426,7 @@ export async function POST(req: NextRequest) {
           });
         }
 
-        const envelope = res.envelope as any;
+        const envelope = res.envelope as ToolEnvelope;
         const card = res.card as KingaCard | undefined;
 
         const output = await synthesizeWithLLM({
@@ -463,7 +462,7 @@ export async function POST(req: NextRequest) {
         suggestedTitle: llmTitle || autoTitleFrom(message || currentArtifactTitle || ""),
       },
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("[/api/chat] error:", err);
     return NextResponse.json(
       {

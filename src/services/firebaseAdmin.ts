@@ -17,7 +17,7 @@ if (!projectId) {
 }
 
 // Prefer explicit service account (FIREBASE_SERVICE_ACCOUNT_KEY), else ADC
-let credential: any | undefined;
+let credential: ReturnType<typeof applicationDefault> | ReturnType<typeof cert> | undefined;
 const sa = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
 try {
   if (sa) credential = cert(JSON.parse(sa));

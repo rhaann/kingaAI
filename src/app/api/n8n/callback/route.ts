@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
     // --- 5. Send a success response back to n8n ---
     return NextResponse.json({ success: true, message: 'Callback received and processed.' });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error in n8n callback:", error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

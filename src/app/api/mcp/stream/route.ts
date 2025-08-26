@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
     const stream = new ReadableStream({
       async start(controller) {
         const encoder = new TextEncoder();
-        const write = (event: string, data: any) => {
+        const write = (event: string, data: unknown) => {
           controller.enqueue(
             encoder.encode(`event: ${event}\ndata: ${typeof data === "string" ? data : JSON.stringify(data)}\n\n`)
           );
@@ -150,15 +150,17 @@ export async function GET(req: NextRequest) {
 
           write("done", "ok");
           controller.close();
-        } catch (err: any) {
-          write("error", err?.message ?? "stream failed");
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err ?? "stream failed");
+          write("error", msg);
           controller.close();
         }
       },
     });
 
     return new Response(stream, { headers: sseHeaders() });
-  } catch (err: any) {
-    return new Response(`stream failed: ${err?.message || err}`, { status: 500 });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err ?? "");
+    return new Response(`stream failed: ${msg}`, { status: 500 });
   }
 }

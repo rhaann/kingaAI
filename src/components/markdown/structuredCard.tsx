@@ -3,15 +3,16 @@
 import * as React from "react";
 import type { KingaCard } from "@/types/types";
 
-// Temporary shim: accept legacy `data` and convert to KingaCard when possible.
+
 function toKingaCard(input: unknown): KingaCard | null {
-  if (!input || typeof input !== "object") return null;
+  if (input === null || typeof input !== "object") return null;
 
-  // Already a KingaCard?
-  const k = input as any;
-  if (Array.isArray(k?.sections)) return k as KingaCard;
+  // Already a KingaCard? (has a sections array)
+  if ("sections" in input && Array.isArray((input as { sections?: unknown }).sections)) {
+    return input as KingaCard;
+  }
 
-  // Legacy flat object -> single section
+  // Convert a plain object into a simple KingaCard
   const obj = input as Record<string, unknown>;
   const items = Object.entries(obj).map(([label, value]) => ({
     label,
@@ -24,6 +25,8 @@ function toKingaCard(input: unknown): KingaCard | null {
     sections: [{ title: undefined, items }],
   };
 }
+
+
 
 // Turn a card into plain text for clipboard
 function cardToPlainText(card: KingaCard): string {

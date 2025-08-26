@@ -1,8 +1,16 @@
-// src/app/components/markdown/index.tsx
 "use client";
 
 import React, { useMemo, useState } from "react";
 import { Copy, Check } from "lucide-react";
+
+type FieldItem = { label: string; value: string };
+type MCPEnvelope = { result?: { content?: Array<{ text?: unknown }> } };
+type OpenAIMessageArray = Array<{ message?: { content?: unknown } }>;
+type GenericObject = Record<string, unknown>;
+
+const isObject = (v: unknown): v is GenericObject =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
 
 /**
  * Very small helper: turn anything into a plain string for copy/render.
@@ -23,7 +31,7 @@ function toStr(v: unknown): string {
  * Try to parse a JSON-looking payload (string that starts with { or [}).
  * Returns undefined if it's not JSON.
  */
-function safeParseJSON(content: string): any | undefined {
+function safeParseJSON(content: string): unknown | undefined {
   const trimmed = content.trim();
   if (!trimmed) return undefined;
   const looksJson = trimmed.startsWith("{") || trimmed.startsWith("[");
@@ -44,44 +52,46 @@ function safeParseJSON(content: string): any | undefined {
  * - If it's an object, use its own keys.
  * Always return an ordered list of { label, value } preserving object key order.
  */
-function extractFields(raw: any): Array<{ label: string; value: string }> | null {
+function extractFields(raw: unknown): Array<{ label: string; value: string }> | null {
   if (raw == null) return null;
 
-  // If MCP-ish shape: { result: { content: [{ text: "..." }] } }
-  if (typeof raw === "object" && raw.result && Array.isArray(raw.result.content)) {
-    const t = raw.result.content[0]?.text;
+  // MCP-ish shape: { result: { content: [{ text: "..." }] } }
+  if (isObject(raw) && "result" in raw) {
+    const env = raw as MCPEnvelope;
+    const t = env.result?.content?.[0]?.text;
     if (typeof t === "string") {
-      // Try parsing that text as JSON too; otherwise treat as plain text.
       const inner = safeParseJSON(t);
-      if (inner && typeof inner === "object") {
+      if (inner && isObject(inner)) {
         return extractFields(inner);
       }
       return [{ label: "Result", value: toStr(t) }];
     }
   }
 
-  // If it's an array of messages (OpenAI style) and the first has content string:
-  if (Array.isArray(raw) && raw.length && raw[0]?.message?.content) {
-    const txt = raw[0].message.content;
+  // Array of messages (OpenAI style) with first.message.content
+  if (Array.isArray(raw) && raw.length) {
+    const arr = raw as OpenAIMessageArray;
+    const txt = arr[0]?.message?.content;
     const inner = typeof txt === "string" ? safeParseJSON(txt) : undefined;
-    if (inner && typeof inner === "object") {
+    if (inner && isObject(inner)) {
       return extractFields(inner);
     }
-    return [{ label: "Result", value: toStr(txt) }];
+    if (txt !== undefined) {
+      return [{ label: "Result", value: toStr(txt) }];
+    }
   }
 
-  // Generic object -> field list (preserve insertion order)
-  if (typeof raw === "object" && !Array.isArray(raw)) {
-    const out: Array<{ label: string; value: string }> = [];
+  // Generic object → field list (preserve key order)
+  if (isObject(raw)) {
+    const out: Array<FieldItem> = [];
     for (const key of Object.keys(raw)) {
-      const value = raw[key];
-      // Only include primitives or simple JSON; nested objects/arrays become compact strings
+      const value = (raw as GenericObject)[key];
       out.push({ label: beautifyLabel(key), value: toStr(value) });
     }
     return out.length ? out : null;
   }
 
-  // Simple value
+  // Primitive
   if (typeof raw !== "object") {
     return [{ label: "Result", value: toStr(raw) }];
   }

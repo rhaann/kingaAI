@@ -47,6 +47,7 @@ export default function SideMenu({
   // Subscribe to featurePermissions/activity for current user
   useEffect(() => {
     let unsubPerm: (() => void) | null = null;
+
     const unsubAuth = auth.onAuthStateChanged((u) => {
       if (unsubPerm) {
         unsubPerm();
@@ -56,18 +57,26 @@ export default function SideMenu({
         setCanSeeActivity(false);
         return;
       }
+
       const ref = doc(db, "users", u.uid, "featurePermissions", "activity");
       unsubPerm = onSnapshot(
         ref,
-        (snap) => setCanSeeActivity(!!(snap.exists() && (snap.data() as any)?.enabled === true)),
+        (snap) => {
+          const ok =
+            snap.exists() &&
+            ((snap.data() as { enabled?: boolean } | undefined)?.enabled === true);
+          setCanSeeActivity(!!ok);
+        },
         () => setCanSeeActivity(false)
       );
     });
+
     return () => {
       unsubAuth();
       if (unsubPerm) unsubPerm();
     };
   }, []);
+
 
   return (
     <aside

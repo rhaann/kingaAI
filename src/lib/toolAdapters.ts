@@ -16,10 +16,10 @@ export type ToolEnvelope = {
     headline?: string;
     linkedin_url?: string;
     photo_url?: string;
-    employment_history?: string | any[];
+    employment_history?: string | unknown[];
   };
   
-  function safeJSON(v: any) {
+  function safeJSON(v: unknown) {
     try { return typeof v === "string" ? JSON.parse(v) : v; } catch { return null; }
   }
   

@@ -78,6 +78,8 @@ export type DriveFile = {
  * Defines the possible return structures from the sendMessage service.
  * It can either be a simple text response or a request to use a tool.
  */
+type ToolArgs = Record<string, unknown>;
+
 export type LLMResult = 
   | { type: 'text'; content: string | null }
   | { 
@@ -94,7 +96,7 @@ export type LLMResult =
   { 
     type: 'tool_call';
     toolName: string; 
-    toolArgs: any 
+    toolArgs: ToolArgs 
 
   }; // For dynamic n8n tools
 

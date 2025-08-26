@@ -38,7 +38,7 @@
 
 import { auth } from "@/services/firebase"; // must export a Firebase Web SDK auth instance
 
-type Body = Record<string, any>;
+type Body = Record<string, unknown>;
 
 export async function callChatApi(body: Body) {
   const user = auth.currentUser;

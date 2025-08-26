@@ -27,7 +27,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 function convertToOpenAITool(tool: {
   name: string;
   description: string;
-  parameters: any;
+  parameters: Record<string, unknown>;
 }): OpenAI.Chat.Completions.ChatCompletionTool {
   return {
     type: "function",
@@ -177,7 +177,7 @@ async function sendToOpenAI(
   return { type: "text", content: raw || null };
 }
 
-function safeParseArgs(jsonLike: string): any {
+function safeParseArgs(jsonLike: string): unknown {
   try {
     return JSON.parse(jsonLike);
   } catch {

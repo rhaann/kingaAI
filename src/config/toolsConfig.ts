@@ -21,7 +21,7 @@
 export type AITool = {
   name: string;
   description: string;
-  parameters: Record<string, any>;
+  parameters: Record<string, unknown>;
 };
 
 export const INTERNAL_TOOLS: AITool[] = [

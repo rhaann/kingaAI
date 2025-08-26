@@ -61,7 +61,7 @@ export function tryParseJSON(raw?: string | null) {
   }
   
   /** Sometimes tools return JSON INSIDE fields like message.content (as a string). Try to pull that out. */
-  export function pluckEmbeddedJson(obj: any): any | null {
+  export function pluckEmbeddedJson(obj: unknown): unknown | null {
     if (!obj || typeof obj !== "object") return null;
   
     // Search shallow fields for JSON-looking strings

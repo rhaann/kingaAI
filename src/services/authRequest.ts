@@ -29,8 +29,18 @@ export async function getUserFromRequest() {
   try {
     const decoded = await verifyIdToken(token);
     return { uid: decoded.uid, decoded };
-  } catch (e:any) {
-    console.error("[auth] verifyIdToken failed:", e?.errorInfo || e?.message || e);
+  } catch (e: unknown) {
+    const msg =
+      (typeof e === "object" &&
+        e !== null &&
+        "errorInfo" in e &&
+        typeof (e as { errorInfo?: unknown }).errorInfo === "string")
+        ? (e as { errorInfo: string }).errorInfo
+        : e instanceof Error
+        ? e.message
+        : String(e);
+  
+    console.error("[auth] verifyIdToken failed:", msg);
     return null;
   }
 }

@@ -19,9 +19,19 @@ import { buildConversationHistory } from "@/lib/chat/buildConversationHistory";
 import { auth, db } from "@/services/firebase";
 import { collection, getDocs } from "firebase/firestore";
 
+type SaveResult = {
+  artifact?: Artifact;
+  versionNumber?: number;
+  versionIndex?: number;
+};
+type ChatLike = {
+  messages?: Message[];
+  modelConfig?: Partial<ModelConfig>;
+  artifacts?: Artifact[];
+};
+
 
 export function ChatApplication() {
-  // Local UI state
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentArtifact, setCurrentArtifact] = useState<Artifact | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -36,12 +46,9 @@ export function ChatApplication() {
     currentChatId,
     createNewChat,
     deleteChat,
-    updateCurrentChatModel,
     saveMessagesToCurrentChat,
     saveArtifactToCurrentChat,
     loadChat,
-    updateChatTitle,
-    updateChat,
   } = useChats();
 
   const currentChat = useMemo(
@@ -54,11 +61,9 @@ export function ChatApplication() {
     const chat = chats.find((c) => c.id === currentChatId);
   
     if (chat) {
-      // never set undefined into state
-      setMessages(Array.isArray((chat as any).messages) ? (chat as any).messages : []);
-  
-      // modelConfig might be missing on new chats
-      const mc = (chat as any).modelConfig;
+      const c = chat as ChatLike;
+      setMessages(Array.isArray(c.messages) ? c.messages : []);
+      const mc = c.modelConfig;
       const byId   = mc?.id   ? AVAILABLE_MODELS.find((m) => m.id === mc.id)   : null;
       const byName = mc?.name ? AVAILABLE_MODELS.find((m) => m.name === mc.name) : null;
       setSelectedModel(byId || byName || AVAILABLE_MODELS[0]);
@@ -76,14 +81,14 @@ export function ChatApplication() {
     const chat = chats.find((c) => c.id === currentChatId);
     if (!chat) return;
   
-    const newMessages = Array.isArray((chat as any).messages) ? (chat as any).messages : [];
-    // Only pull from store if it’s caught up (>=) to what the UI has
+    const c = chat as ChatLike;
+    const newMessages = Array.isArray(c.messages) ? c.messages : []; 
     if (newMessages.length >= messages.length && messages !== newMessages) {
       setMessages(newMessages);
     }
   
     if (currentArtifact) {
-      const updated = chat.artifacts?.find?.((a: any) => a.id === currentArtifact.id);
+      const updated = c.artifacts?.find?.((a: Artifact) => a.id === currentArtifact.id);
       if (updated) {
         const maxIdx = Math.max(0, (updated.versions?.length ?? 1) - 1);
         setCurrentArtifact(updated);
@@ -208,10 +213,11 @@ export function ChatApplication() {
     const persisted = await saveArtifactToCurrentChat(draft);
     if (persisted) {
       // Support either return shape: { artifact, versionNumber } OR { artifactId, versionIndex }
-      const artifactFromReturn = (persisted as any).artifact as Artifact | undefined;
+      type SaveResult = { artifact?: Artifact; versionNumber?: number; versionIndex?: number };
+      const pr = persisted as SaveResult | undefined;
+      const artifactFromReturn = pr?.artifact;
       const versionNumber =
-        (persisted as any).versionNumber ??
-        ((persisted as any).versionIndex != null ? (persisted as any).versionIndex : 1);
+        pr?.versionNumber ?? (pr?.versionIndex != null ? pr.versionIndex : 1);
 
       const artifactToOpen = artifactFromReturn ?? draft;
       setCurrentArtifact(artifactToOpen);
@@ -272,12 +278,16 @@ export function ChatApplication() {
       if (!perUserSnap.empty) {
         const out: ToolFlags = { ...defaults };
         perUserSnap.forEach((d) => {
-          const data = d.data() as Record<string, any>;
-          const on =
-            data.allowed ?? data.enabled ?? data.allow ?? data.value ?? data.on;
-          if (typeof on === "boolean" && (d.id in out)) {
-            // doc ids must be: email_finder, search, crm
-            (out as any)[d.id] = on;
+          const data = d.data() as Record<string, unknown>;
+          const on = (data as Record<string, unknown>).allowed
+            ?? (data as Record<string, unknown>).enabled
+            ?? (data as Record<string, unknown>).allow
+            ?? (data as Record<string, unknown>).value
+            ?? (data as Record<string, unknown>).on;
+          
+          const key = d.id as keyof ToolFlags;
+          if (typeof on === "boolean" && key in out) {
+            out[key] = on;
           }
         });
         return out;
@@ -289,11 +299,16 @@ export function ChatApplication() {
       if (!globalSnap.empty) {
         const out: ToolFlags = { ...defaults };
         globalSnap.forEach((d) => {
-          const data = d.data() as Record<string, any>;
-          const on =
-            data.allowed ?? data.enabled ?? data.allow ?? data.value ?? data.on;
-          if (typeof on === "boolean" && (d.id in out)) {
-            (out as any)[d.id] = on;
+          const data = d.data() as Record<string, unknown>;
+          const on = (data as Record<string, unknown>).allowed
+            ?? (data as Record<string, unknown>).enabled
+            ?? (data as Record<string, unknown>).allow
+            ?? (data as Record<string, unknown>).value
+            ?? (data as Record<string, unknown>).on;
+          
+          const key = d.id as keyof ToolFlags;
+          if (typeof on === "boolean" && key in out) {
+            out[key] = on;
           }
         });
         return out;
@@ -427,15 +442,14 @@ export function ChatApplication() {
         if (!nextContent.trim()) {
           aiMessage.content = "No changes detected for the document.";
         } else {
-          const saved = await saveArtifactToCurrentChat(normalized);
-          const versionNumber =
-            (saved as any)?.versionNumber ??
-            ((saved as any)?.versionIndex != null ? (saved as any).versionIndex : 1);
-          const persistedArtifact = (saved as any)?.artifact ?? normalized;
+          const saved = (await saveArtifactToCurrentChat(normalized)) as SaveResult | undefined;
+          const finalVersionNumber =
+            saved?.versionNumber ?? (saved?.versionIndex != null ? saved.versionIndex : 1);
+          const persistedArtifact = saved?.artifact ?? normalized;
 
-          openArtifact(persistedArtifact, Math.max(0, (versionNumber ?? 1) - 1));
+          openArtifact(persistedArtifact, Math.max(0, (finalVersionNumber ?? 1) - 1));
           aiMessage.artifactId = persistedArtifact.id;
-          aiMessage.artifactVersion = versionNumber ?? 1;
+          aiMessage.artifactVersion = finalVersionNumber ?? 1;
           aiMessage.content = result.output || "I've updated the document for you.";
         }
       }
@@ -517,8 +531,7 @@ export function ChatApplication() {
                     // not JSON — ignore and let markdown handle it
                   }
 
-                  const isKingaCardFromParsed =
-                    isRecord && Array.isArray((parsed as any)?.sections);
+                  const isKingaCardFromParsed = isRecord && Array.isArray((parsed as { sections?: unknown[] } | null)?.sections);
                   const isCardMsg = !!message.card || isKingaCardFromParsed;
 
                   const bubbleClass = isCardMsg

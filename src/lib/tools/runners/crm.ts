@@ -14,6 +14,7 @@ import {
   getCardFromEnvelope,
   buildCtxFromEnvelope,
 } from "@/lib/tools/envelope";
+import type { KingaEnvelope } from "@/lib/tools/envelope";
 
 // Context passed in by the router/route
 export interface ToolRunContext {
@@ -27,13 +28,16 @@ export interface ToolRunContext {
 // Normalized result returned to the route
 export interface ToolRunResult {
   ok: boolean;
-  envelope?: any;
+  envelope?: KingaEnvelope | null;
   card?: KingaCard | null;
-  ctx?: Record<string, any>;
-  raw?: any;
+  ctx?: Record<string, string>;
+  raw?: unknown;
   error?: string;
   durationMs: number;
 }
+
+const isObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null;
 
 /**
  * Run the CRM MCP tool.
@@ -55,14 +59,25 @@ export async function runCrm(
     });
 
     // Surface raw for debugging if needed
-    const raw =
-      (mcp as any)?.result ??
+    const raw: unknown =
+      (isObject(mcp) && "result" in mcp ? (mcp as { result?: unknown }).result : undefined) ??
       mcp;
 
     // Extract envelope across common MCP response shapes
-    const rawText =
-      (mcp as any)?.result?.content?.[0]?.text ??
-      (typeof (mcp as any)?.result === "string" ? (mcp as any).result : undefined);
+    const result = isObject(mcp) && "result" in mcp ? (mcp as { result?: unknown }).result : undefined;
+
+    let rawText: string | undefined;
+    if (typeof result === "string") {
+      rawText = result;
+    } else if (isObject(result) && "content" in result) {
+      const content = (result as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        const first = content[0];
+        if (isObject(first) && typeof (first as { text?: unknown }).text === "string") {
+          rawText = (first as { text: string }).text;
+        }
+      }
+    }
 
     const { envelope } = extractKingaEnvelope(mcp, rawText);
     const card = getCardFromEnvelope(envelope);
@@ -76,10 +91,10 @@ export async function runCrm(
       raw,
       durationMs: Date.now() - started,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       ok: false,
-      error: err?.message || "CRM failed",
+      error: err instanceof Error ? err.message : "CRM failed",
       durationMs: Date.now() - started,
     };
   }
