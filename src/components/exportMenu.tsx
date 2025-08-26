@@ -1,11 +1,9 @@
 import React, { useState } from 'react';
-import { ChevronDown, FileText, Download, Mail, Loader2, Check } from 'lucide-react';
+import { ChevronDown, FileText, Download, Mail, Loader2 } from 'lucide-react';
 import { Artifact } from '@/types/types';
-import { useGoogleDrive } from '@/context/googleDriveContext';
 
-export type ExportFormat = 'pdf' | 'word' | 'markdown' | 'text' | 'email' | 'google-drive';
+export type ExportFormat = 'pdf' | 'markdown' | 'text' | 'email';
 type ArtifactLike = Artifact & { content?: string };
-
 
 interface ExportMenuProps {
   artifact: ArtifactLike;
@@ -17,30 +15,15 @@ interface ExportOption {
   label: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
-  requiresGoogleDrive?: boolean;
 }
 
 const EXPORT_OPTIONS: ExportOption[] = [
-  // {
-  //   format: 'google-drive',
-  //   label: 'Save to Google Drive',
-  //   description: 'Save to Kinga Documents folder',
-  //   icon: Cloud,
-  //   requiresGoogleDrive: true
-  // },
   {
     format: 'pdf',
     label: 'Export as PDF',
     description: 'Professional document format',
     icon: FileText
   },
-  // {
-  //   format: 'word',
-  //   label: 'Export as Word',
-  //   description: 'Editable document format',
-  //   icon: FileText
-  // },
-
   {
     format: 'text',
     label: 'Export as Text',
@@ -58,58 +41,18 @@ const EXPORT_OPTIONS: ExportOption[] = [
 export const ExportMenu: React.FC<ExportMenuProps> = ({ artifact, onExport }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isExporting, setIsExporting] = useState<ExportFormat | null>(null);
-  const [driveUrl, setDriveUrl] = useState<string | null>(null);
-  const { isConnected, connect, saveDocument } = useGoogleDrive();
 
   const handleExport = async (format: ExportFormat) => {
     setIsExporting(format);
-    
     try {
-      if (format === 'google-drive') {
-        if (!isConnected) {
-          // Auto-connect if not connected
-          const connected = await connect();
-          if (!connected) {
-            setIsExporting(null);
-            return;
-          }
-        }
-        
-        // Save to Google Drive and get shareable URL
-        const shareableUrl = await saveDocument(artifact.title, artifact.content);
-        setDriveUrl(shareableUrl);
-        
-        // Show success state briefly, then close
-        setTimeout(() => {
-          setIsOpen(false);
-          setDriveUrl(null);
-        }, 3000);
-      } else {
-        // Handle other export formats
-        onExport(format, artifact);
-        setIsOpen(false);
-      }
+      onExport(format, artifact);
+      setIsOpen(false);
     } catch (error) {
       console.error('Export failed:', error);
-      // Could add error toast here
     } finally {
-      if (format !== 'google-drive') {
-        setIsExporting(null);
-      }
+      setIsExporting(null);
     }
   };
-
-  // const copyDriveUrl = () => {
-  //   if (driveUrl) {
-  //     navigator.clipboard.writeText(driveUrl);
-  //   }
-  // };
-
-  // const openInDrive = () => {
-  //   if (driveUrl) {
-  //     window.open(driveUrl, '_blank');
-  //   }
-  // };
 
   return (
     <div className="relative">
@@ -138,14 +81,11 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({ artifact, onExport }) =>
               <div className="text-xs font-medium text-gray-500 uppercase tracking-wider px-3 py-2">
                 Export Options
               </div>
-              
+
               {EXPORT_OPTIONS.map((option) => {
                 const Icon = option.icon;
-                const isGoogleDrive = option.format === 'google-drive';
-                const needsConnection = isGoogleDrive && !isConnected;
                 const isCurrentlyExporting = isExporting === option.format;
-                const hasSucceeded = isGoogleDrive && driveUrl && isCurrentlyExporting;
-                
+
                 return (
                   <button
                     key={option.format}
@@ -153,42 +93,17 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({ artifact, onExport }) =>
                     disabled={!!isExporting}
                     className="w-full flex items-center gap-3 px-3 py-3 hover:bg-gray-50 rounded-lg transition-colors text-left group disabled:opacity-50"
                   >
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                      hasSucceeded
-                        ? 'bg-green-100'
-                        : needsConnection 
-                          ? 'bg-yellow-100' 
-                          : isGoogleDrive 
-                            ? 'bg-green-100' 
-                            : 'bg-blue-100'
-                    }`}>
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-blue-100">
                       {isCurrentlyExporting ? (
                         <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-                      ) : hasSucceeded ? (
-                        <Check className="w-4 h-4 text-green-600" />
                       ) : (
-                        <Icon className={`w-4 h-4 ${
-                          needsConnection 
-                            ? 'text-yellow-600' 
-                            : isGoogleDrive 
-                              ? 'text-green-600' 
-                              : 'text-blue-600'
-                        }`} />
+                        <Icon className="w-4 h-4 text-blue-600" />
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium text-gray-900 text-sm">
-                        {hasSucceeded ? 'Saved to Drive!' : option.label}
-                        {needsConnection && (
-                          <span className="ml-2 text-xs text-yellow-600">(Will connect)</span>
-                        )}
-                      </div>
-                      <div className="text-gray-500 text-xs">
-                        {hasSucceeded ? 'Document saved successfully' : option.description}
-                      </div>
+                      <div className="font-medium text-gray-900 text-sm">{option.label}</div>
+                      <div className="text-gray-500 text-xs">{option.description}</div>
                     </div>
-                    
-
                   </button>
                 );
               })}
