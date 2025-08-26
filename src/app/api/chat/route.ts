@@ -7,7 +7,6 @@ import { MCP_SERVER, llmToolsForPermissions } from "@/config/toolsConfig";
 import { runEmailFinder } from "@/lib/tools/runners/emailFinder";
 import { getUserFromRequest } from "@/services/authRequest";
 import { adminDb } from "@/services/firebaseAdmin";
-import { FieldPath } from "firebase-admin/firestore";
 
 
 
@@ -78,23 +77,7 @@ function buildUpdateArtifact(currentArtifactId: string | null, args: { content?:
 
 
 async function readToolFlags(userId: string): Promise<{ [key: string]: boolean }> {
-  const toolIds = ["crm", "email_finder", "search"];
-
-  const permissionsRef = adminDb
-    .collection("users")
-    .doc(userId)
-    .collection("toolPermissions");
-
-
-  // Query by document ID for the tools we care about
-  const q = permissionsRef.where(FieldPath.documentId(), "in", toolIds);
-
-  // Default: fail closed
-  const permissionsStatus: { [key: string]: boolean } = {
-    crm: false,
-    email_finder: false,
-    search: false,
-  };
+  const defaults: { [key: string]: boolean } = { crm: false, email_finder: false, search: false };
 
   // Helper: tolerate different boolean field names
   const pickBool = (data: Record<string, unknown>): boolean | undefined => {
@@ -107,22 +90,28 @@ async function readToolFlags(userId: string): Promise<{ [key: string]: boolean }
   };
 
   try {
-    const querySnapshot = await q.get();
-
-    querySnapshot.forEach((doc) => {
-      const data = doc.data() as Record<string, unknown>;
-      const v = pickBool(data);
-      if (typeof v === "boolean" && doc.id in permissionsStatus) {
-        permissionsStatus[doc.id] = v;
-      }
-    });
-
-    return permissionsStatus;
+    // 1) Try per-user collection: users/{uid}/toolPermissions/{toolId}
+    const perUserSnap = await adminDb
+      .collection("users")
+      .doc(userId)
+      .collection("toolPermissions")
+      .get();
+    if (!perUserSnap.empty) {
+      const out = { ...defaults };
+      perUserSnap.forEach((d) => {
+        const data = d.data() as Record<string, unknown>;
+        const on = pickBool(data);
+        const key = d.id as keyof typeof out;
+        if (typeof on === "boolean" && key in out) out[key] = on;
+      });
+      console.log("out", out);
+      return out;
+    }
   } catch (error) {
     console.error("Error fetching tool permissions:", error);
-    // Return defaults (all false) rather than {}
-    return permissionsStatus;
   }
+
+  return defaults;
 }
 
 
@@ -214,7 +203,6 @@ export async function POST(req: NextRequest) {
 
     // --- Tool permissions ---------------------------------------------------
     const toolFlags = await readToolFlags(userId);
-    console.log("[/api/chat] tool flags:", toolFlags);
 
     // --- 2) Ask the model (LLM) --------------------------------------------
     // Build LLM tool list based on permissions
@@ -223,8 +211,6 @@ export async function POST(req: NextRequest) {
       email_finder: toolFlags.email_finder,
       crm: toolFlags.crm,
     } as Record<string, boolean>;
-
-    console.log("[/api/chat] permsForLLM:", permsForLLM);
 
     const llm = await sendMessage(message, {
       modelConfig: modelConfig!, // you already set this per chat

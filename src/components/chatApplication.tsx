@@ -401,8 +401,6 @@ export function ChatApplication() {
       const { result } = await callChatApi({ ...requestBody, chatId });
 
       // Optional debug logs
-      console.log("[chatApplication] requestBody:", requestBody);
-      console.log("[chatApplication] result:", result);
 
       // Update chat title if server suggested one
       // if (result?.suggestedTitle && chatId) {
