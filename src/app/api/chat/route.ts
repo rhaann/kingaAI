@@ -143,7 +143,7 @@ async function synthesizeWithLLM({
     "You are helping the user. Interpret the tool results below and produce a concise, helpful answer. " +
     "If sources are present (envelope.meta.source), cite them briefly. Avoid dumping raw JSON.\n\n" +
     `<tool_json v="1">\n${JSON.stringify(envelope)}\n</tool_json>`;
-
+  void _message;
   const llm = await sendMessage(synthesisPrompt, {
     modelConfig,
     conversationHistory,
@@ -193,7 +193,7 @@ export async function POST(req: NextRequest) {
     const documentContext: string | undefined = body.documentContext;
     const currentArtifactId: string | null = body.currentArtifactId ?? null;
     const currentArtifactTitle: string | undefined = body.currentArtifactTitle;
-    const _chatId: string | undefined = body.chatId; 
+    // const chatId: string | undefined = body.chatId; 
 
     if (!message) {
       return NextResponse.json(

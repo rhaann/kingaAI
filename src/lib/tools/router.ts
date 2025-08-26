@@ -11,7 +11,7 @@
 import type { KingaCard } from "@/types/types";
 import { runEmailFinder } from "@/lib/tools/runners/emailFinder";
 
-export type SimpleTurn = { role: "user" | "assistant"; content: string };
+// export type SimpleTurn = { role: "user" | "assistant"; content: string };
 
 export type RouterResult =
   | { handled: true; output: string; card?: KingaCard; suggestedTitle?: string }
@@ -46,7 +46,7 @@ function debugConfig(): { ok: boolean; reason?: string; base?: string; headerNam
 
 export async function hardRouteEmailFinder(
   message: string,
-  _conversationHistory?: SimpleTurn[]
+  // conversationHistory?: SimpleTurn[]
 ): Promise<RouterResult> {
   const text = String(message || "");
 

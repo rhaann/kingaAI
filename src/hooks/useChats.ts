@@ -60,7 +60,8 @@ const toChat = (d: ChatDoc): Chat => ({
 const chatDocConverter: FirestoreDataConverter<ChatDoc> = {
   toFirestore: (chat: ChatDoc) => {
     // strip id from stored doc
-    const { id, ...rest } = chat;
+    const { id: _omit, ...rest } = chat;
+    void _omit;           
     return rest;
   },
   fromFirestore: (snap) => {

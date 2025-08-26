@@ -350,11 +350,11 @@ export function ChatApplication() {
         ? currentChatArtifacts[currentChatArtifacts.length - 1]
         : null);
 
-    const versions = fallbackArtifact?.versions ?? [];
-    const latest = versions.length ? (versions[versions.length - 1].content ?? "") : "";
-    const versionInfo = versions
-      .map((v, i) => `V${i + 1}@${new Date(v.createdAt).toLocaleString()}`)
-      .join(", ");
+    // const versions = fallbackArtifact?.versions ?? [];
+    // const latest = versions.length ? (versions[versions.length - 1].content ?? "") : "";
+    // const versionInfo = versions
+    //   .map((v, i) => `V${i + 1}@${new Date(v.createdAt).toLocaleString()}`)
+    //   .join(", ");
     
 
     // put this near the top of handleSend (before requestBody)
@@ -414,7 +414,7 @@ export function ChatApplication() {
       // }
 
       // 5) Build assistant message
-      let aiMessage: Message = {
+      const aiMessage: Message = {
         id: thinkingMessageId,
         role: "ai",
         content: result.output || "No response",
