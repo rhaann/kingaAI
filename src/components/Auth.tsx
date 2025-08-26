@@ -157,10 +157,10 @@ export function Auth({ collapsed = false }: AuthProps) {
       {error && <p className="text-red-400 text-sm text-center">{error}</p>}
 
       <div className="flex gap-3">
-        <button onClick={handleEmailSignIn} disabled={isSubmitting} className="w-full flex-1 py-2 px-4 bg-blue-600 hover:bg-blue-700 rounded-md transition-colors disabled:bg-blue-800 font-semibold">
+        <button onClick={handleEmailSignIn} disabled={isSubmitting} className="w-full flex-1 py-2 px-4 bg-[#FF3000] hover:bg-[#e02b00] text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-semibold">
           {isSubmitting ? "Signing In..." : "Sign In"}
         </button>
-        <button onClick={handleEmailSignUp} disabled={isSubmitting} className="w-full flex-1 py-2 px-4 bg-transparent border border-neutral-500 text-neutral-300 hover:bg-neutral-700 rounded-md transition-colors disabled:bg-transparent font-semibold">
+        <button onClick={handleEmailSignUp} disabled={isSubmitting} className="w-full flex-1 py-2 px-4 bg-transparent border border-[#FF3000] text-neutral-300 hover:bg-neutral-700 rounded-md transition-colors disabled:bg-transparent font-semibold">
           {isSubmitting ? "Signing Up..." : "Sign Up"}
         </button>
       </div>

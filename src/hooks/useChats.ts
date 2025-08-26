@@ -10,6 +10,7 @@ import {
   updateDoc,
   deleteDoc,
   serverTimestamp,
+  Timestamp,
   query,
   orderBy,
   type FirestoreDataConverter,
@@ -31,19 +32,15 @@ type SaveResult = { artifact?: Artifact; versionNumber?: number; versionIndex?: 
 /** Firestore doc shape (allows FieldValue + an internal preview field). */
 type ChatDoc = Omit<Chat, "createdAt" | "updatedAt"> & {
   id: string;
-  createdAt: number | FieldValue;
-  updatedAt: number | FieldValue;
+  createdAt: number | Timestamp;
+  updatedAt: number | Timestamp;
   /** Stored in Firestore, not part of the public Chat type */
   lastMessagePreview?: string;
 };
 
-const toMillis = (v: unknown): number => {
+const toMillis = (v: number | Timestamp): number => {
   if (typeof v === "number") return v;
-  if (v && typeof v === "object" && "toMillis" in (v as { toMillis?: () => number })) {
-    const fn = (v as { toMillis?: () => number }).toMillis;
-    if (typeof fn === "function") return fn();
-  }
-  return Date.now();
+  return v.seconds;
 };
 
 const toChat = (d: ChatDoc): Chat => ({
@@ -76,8 +73,8 @@ const chatDocConverter: FirestoreDataConverter<ChatDoc> = {
       modelConfig: data.modelConfig as Chat["modelConfig"],
       messages,
       artifacts,
-      createdAt: (data.createdAt as number | FieldValue) ?? Date.now(),
-      updatedAt: (data.updatedAt as number | FieldValue) ?? Date.now(),
+      createdAt: (data.createdAt as Timestamp) ?? Date.now(),
+      updatedAt: (data.updatedAt as Timestamp) ?? Date.now(),
       lastMessagePreview:
         typeof data.lastMessagePreview === "string" ? data.lastMessagePreview : undefined,
     };
