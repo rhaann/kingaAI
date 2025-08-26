@@ -72,7 +72,7 @@ export const googleDriveSave = functions.https.onRequest(async (request, respons
       throw new functions.https.HttpsError("invalid-argument", "Missing title or content.");
     }
     // --- 2. FIX: Pass the userId to the service function ---
-    const { file, newTokens } = await googleDrive.createGoogleDoc(userId, tokens, title, content);
+    const { file, newTokens } = await googleDrive.createGoogleDoc( tokens, title, content);
     if (newTokens) {
       await userDocRef.set({ googleDriveTokens: newTokens }, { merge: true });
     }
