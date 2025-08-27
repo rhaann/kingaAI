@@ -22,6 +22,7 @@ const sa = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
 try {
   if (sa) credential = cert(JSON.parse(sa));
   else credential = applicationDefault();
+  console.log("credential", sa);
 } catch {
   // If parsing ADC fails, leave credential undefined (use unauth'ed app with projectId)
   credential = undefined;

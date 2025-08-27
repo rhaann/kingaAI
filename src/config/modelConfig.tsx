@@ -11,15 +11,6 @@ const ALL_MODELS: ModelConfig[] = [
     pricing: { input: 10, output: 30 }
   },
   {
-    id: 'gpt-3.5-turbo',
-    name: 'GPT-3.5 Turbo',
-    provider: 'OpenAI', 
-    model: 'gpt-3.5-turbo', // This definitely works
-    description: 'Fast and efficient for most tasks',
-    contextLength: 16384,
-    pricing: { input: 0.5, output: 1.5 }
-  },
-  {
     id: 'gemini-1.5-flash-latest',
     name: 'Gemini Flash',
     provider: 'Google',
