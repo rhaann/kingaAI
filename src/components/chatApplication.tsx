@@ -59,17 +59,13 @@ export function ChatApplication() {
 
   useEffect(() => {
     const chat = chats.find((c) => c.id === currentChatId);
+    if (!chat) return; 
   
-    if (chat) {
-      const c = chat as ChatLike;
-      setMessages(Array.isArray(c.messages) ? c.messages : []);
-      const mc = c.modelConfig;
-      const byId   = mc?.id   ? AVAILABLE_MODELS.find((m) => m.id === mc.id)   : null;
-      const byName = mc?.name ? AVAILABLE_MODELS.find((m) => m.name === mc.name) : null;
-      setSelectedModel(byId || byName || AVAILABLE_MODELS[0]);
-    } else if (currentChatId) {
-      setMessages([]);
-    }
+    const c = chat as ChatLike;
+    const mc = c.modelConfig;
+    const byId   = mc?.id   ? AVAILABLE_MODELS.find((m) => m.id === mc.id)   : null;
+    const byName = mc?.name ? AVAILABLE_MODELS.find((m) => m.name === mc.name) : null;
+    setSelectedModel(byId || byName || AVAILABLE_MODELS[0]);
   
     // only on chat change
     closeArtifact();

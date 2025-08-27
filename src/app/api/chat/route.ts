@@ -168,6 +168,7 @@ async function generateChatTitleWithLLM({
   if (llm.type !== "text") return null;
   const t = (llm.content || "").trim();
   return t ? (t.length > 60 ? t.slice(0, 60) : t) : null;
+
 }
 
 export async function POST(req: NextRequest) {
