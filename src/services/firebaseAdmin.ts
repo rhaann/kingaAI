@@ -1,43 +1,41 @@
-/**
- * Firebase Admin (server-only)
- * - Initializes a single Admin app (lazy singleton).
- * - Exposes `adminAuth`, `adminDb`, and `verifyIdToken(idToken)`.
- * - Prefers FIREBASE_SERVICE_ACCOUNT_KEY; falls back to ADC.
- */
-
-import { getApps, initializeApp, applicationDefault, cert } from "firebase-admin/app";
+import { getApps, initializeApp, cert, applicationDefault } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
+// optional: import type { ServiceAccount } from "firebase-admin";
 
-const projectId =
-  process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+function getCredentialAndProject() {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+  if (raw) {
+    const gsa = JSON.parse(raw) as {
+      project_id?: string;
+      client_email?: string;
+      private_key?: string;
+    };
 
-if (!projectId) {
-  throw new Error("[firebaseAdmin] Set FIREBASE_PROJECT_ID in .env.local");
+    const credential = cert({
+      projectId: gsa.project_id,
+      clientEmail: gsa.client_email,
+      privateKey: gsa.private_key?.replace(/\\n/g, "\n"),
+    }); // as ServiceAccount  <- not required if keys are camelCase like above
+
+    return { credential, projectId: gsa.project_id };
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    return { credential: applicationDefault(), projectId: process.env.FIREBASE_PROJECT_ID };
+  }
+  throw new Error("FIREBASE_SERVICE_ACCOUNT_KEY is missing in production");
 }
 
-// Prefer explicit service account (FIREBASE_SERVICE_ACCOUNT_KEY), else ADC
-let credential: ReturnType<typeof applicationDefault> | ReturnType<typeof cert> | undefined;
-const sa = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
-try {
-  if (sa) credential = cert(JSON.parse(sa));
-  else credential = applicationDefault();
-  console.log("credential", sa);
-} catch {
-  // If parsing ADC fails, leave credential undefined (use unauth'ed app with projectId)
-  credential = undefined;
-}
+const { credential, projectId } = getCredentialAndProject();
 
 const app =
-  getApps()[0] ||
+  getApps()[0] ??
   initializeApp({
-    projectId,
-    ...(credential ? { credential } : {}),
+    credential,
+    projectId: projectId ?? process.env.FIREBASE_PROJECT_ID,
   });
 
 export const adminAuth = getAuth(app);
 export const adminDb = getFirestore(app);
-
-export function verifyIdToken(token: string) {
-  return adminAuth.verifyIdToken(token);
-}
+export const verifyIdToken = (token: string) => adminAuth.verifyIdToken(token);
