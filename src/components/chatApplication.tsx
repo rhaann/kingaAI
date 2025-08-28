@@ -57,6 +57,10 @@ export function ChatApplication() {
   );
   const currentChatArtifacts = currentChat?.artifacts || [];
 
+  
+  const pendingIdsRef = useRef<Set<string>>(new Set());
+
+
   useEffect(() => {
     const chat = chats.find((c) => c.id === currentChatId);
     if (!chat) return; 
@@ -78,11 +82,35 @@ export function ChatApplication() {
     if (!chat) return;
   
     const c = chat as ChatLike;
-    const newMessages = Array.isArray(c.messages) ? c.messages : []; 
-    if (newMessages.length >= messages.length && messages !== newMessages) {
-      setMessages(newMessages);
+    const serverMsgs: Message[] = Array.isArray(c.messages) ? c.messages : [];
+  
+    // Build a set of ids from the server snapshot
+    const serverIds = new Set(serverMsgs.map((m) => m.id));
+  
+    // Collect optimistic messages we’ve added locally that the server
+    // hasn’t echoed yet (using the ids we tracked in the ref)
+    const optimisticMissing: Message[] = Array.from(pendingIdsRef.current)
+      .map((id) => messages.find((m) => m.id === id))
+      .filter((m): m is Message => !!m)
+      .filter((m) => !serverIds.has(m.id));
+  
+    // Adopt the server snapshot, plus any still-missing optimistic messages.
+    // (No dependency issues: deps array remains a fixed size.)
+    const stitched =
+      optimisticMissing.length > 0 ? serverMsgs.concat(optimisticMissing) : serverMsgs;
+  
+    // Only set when actually different to avoid extra renders
+    const changed =
+      messages.length !== stitched.length ||
+      messages.some((m, i) => m.id !== stitched[i]?.id);
+    if (changed) setMessages(stitched);
+  
+    // Any optimistic ids that the server *has* now echoed can be dropped
+    for (const id of Array.from(pendingIdsRef.current)) {
+      if (serverIds.has(id)) pendingIdsRef.current.delete(id);
     }
   
+    // Keep your artifact pane sync the same as before
     if (currentArtifact) {
       const updated = c.artifacts?.find?.((a: Artifact) => a.id === currentArtifact.id);
       if (updated) {
@@ -91,7 +119,9 @@ export function ChatApplication() {
         setCurrentVersionIndex((i) => Math.min(i, maxIdx));
       }
     }
-  }, [chats, currentChatId]); // keep messages OUT of deps
+  }, [chats, currentChatId]); // ← keep deps EXACTLY like this
+  
+  
   
 
 
@@ -314,52 +344,57 @@ export function ChatApplication() {
     }
     return defaults;
   }
-  
   const handleSend = async (messageContent: string) => {
     if (!messageContent.trim()) return;
-
-    // Ensure we have a chatId
+  
+    // Ensure chatId (create one if needed)
     let chatId = currentChatId;
     if (!chatId) {
-      chatId = await createNewChat(selectedModel);
+      const newId = await createNewChat(selectedModel);
+      if (!newId) return;
+      chatId = newId;
     }
-
-    // 1) Add the user message locally
+  
+    // 1) Optimistic user message
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: "user",
       content: messageContent.trim(),
     };
-    const updatedMessages = [...messages, userMessage];
-    setMessages(updatedMessages);
-
-    // 2) Show a temporary thinking bubble
     const thinkingMessageId = crypto.randomUUID();
-    setMessages((prev) => [...prev, { id: thinkingMessageId, role: "ai", content: "..." }]);
-
-    // 3) Prepare request body
+  
+    const updatedMessages = [...messages, userMessage];
+    setMessages(updatedMessages); // show user message immediately
+    setMessages((prev) => [...prev, { id: thinkingMessageId, role: "ai", content: "..." }]); // typing bubble
+  
+    // Track optimistic IDs so the snapshot guard won’t wipe them
+    pendingIdsRef.current.add(userMessage.id);
+    pendingIdsRef.current.add(thinkingMessageId);
+  
+    // 2) Prepare request
     const conversationHistoryForAPI = buildConversationHistory(updatedMessages);
-
+  
     const fallbackArtifact =
       currentArtifact ??
       (currentChatArtifacts.length > 0
         ? currentChatArtifacts[currentChatArtifacts.length - 1]
         : null);
-
-    // put this near the top of handleSend (before requestBody)
-    function buildDocumentContext(art?: Artifact | null, budget = 12000) {
+  
+    function buildDocumentContext(art?: Artifact | null, budget = 12000): string | undefined {
       if (!art) return undefined;
       const versions = art.versions ?? [];
       const index = versions
-        .map((v, i) => `V${i + 1}@${new Date(v.createdAt).toLocaleString()} len=${(v.content ?? "").length}`)
+        .map(
+          (v, i) =>
+            `V${i + 1}@${new Date(v.createdAt).toLocaleString()} len=${(v.content ?? "").length}`
+        )
         .join(", ");
-
+  
       const parts: string[] = [
         `Artifact "${art.title}" (id: ${art.id})`,
         `Versions: ${versions.length}${index ? ` — ${index}` : ""}`,
       ];
-
-      // latest first, then previous versions until budget is used
+  
       let remaining = budget;
       for (let i = versions.length - 1; i >= 0 && remaining > 0; i--) {
         const label = `\n=== V${i + 1} (${new Date(versions[i].createdAt).toLocaleString()}) ===\n`;
@@ -368,13 +403,12 @@ export function ChatApplication() {
         parts.push(label + body.slice(0, take));
         remaining -= label.length + take;
       }
-
       return parts.join("\n");
     }
-
+  
     const documentContext = buildDocumentContext(fallbackArtifact);
     const toolFlags = await fetchToolFlags();
-
+  
     const requestBody = {
       message: userMessage.content,
       modelConfig: selectedModel,
@@ -384,78 +418,73 @@ export function ChatApplication() {
       currentArtifactTitle: fallbackArtifact?.title,
       toolFlags,
     };
-
+  
     try {
-      // 4) Call your API (now includes chatId)
+      // 3) Call API
       const { result } = await callChatApi({ ...requestBody, chatId });
-      console.log("[chat] result keys:", Object.keys(result || {}), result?.rawEnvelopes?.length);
-
-
-      // 5) Build assistant message
+  
+      // 4) Build assistant message
       const aiMessage: Message = {
         id: thinkingMessageId,
         role: "ai",
-        content: result.output || "No response",
+        content: result.output ?? "No response",
       };
-      aiMessage.rawEnvelopes = result.rawEnvelopes as ToolEnvelope[] | undefined;
-
-      
+      aiMessage.rawEnvelopes = (result.rawEnvelopes ?? undefined) as ToolEnvelope[] | undefined;
       if (result.card) aiMessage.card = result.card as KingaCard;
-
-      // 6) Artifact handling
+  
+      // 5) Artifact handling (replace/append strategy)
       if (result.artifact) {
         const incoming = result.artifact as Artifact;
-
+  
         const prev = fallbackArtifact;
         const prevLatest = prev?.versions?.[prev.versions.length - 1]?.content ?? "";
         const newChunk = incoming.versions?.[0]?.content ?? "";
         const now = Date.now();
-
-        // --- REPLACE strategy: if the tool returned any text, use it as the new version.
-        // If it returned empty/whitespace, no-op (keep previous).
+  
         const nextContent = newChunk.trim() ? newChunk : prevLatest;
         const normalized: Artifact = {
           ...incoming,
           versions: [{ content: nextContent, createdAt: now }],
           updatedAt: now,
         };
-
+  
         if (!nextContent.trim()) {
           aiMessage.content = "No changes detected for the document.";
         } else {
-          const saved = (await saveArtifactToCurrentChat(normalized)) as SaveResult | undefined;
+          const saved = (await saveArtifactToCurrentChat(normalized)) as
+            | { artifact?: Artifact; versionNumber?: number; versionIndex?: number }
+            | null
+            | undefined;
+  
           const finalVersionNumber =
             saved?.versionNumber ?? (saved?.versionIndex != null ? saved.versionIndex : 1);
           const persistedArtifact = saved?.artifact ?? normalized;
-
+  
           openArtifact(persistedArtifact, Math.max(0, (finalVersionNumber ?? 1) - 1));
           aiMessage.artifactId = persistedArtifact.id;
           aiMessage.artifactVersion = finalVersionNumber ?? 1;
-          aiMessage.content = result.output || "I've updated the document for you.";
+          aiMessage.content = result.output ?? "I've updated the document for you.";
         }
       }
-
-
-
-
-
-      // 7) Replace thinking with final assistant message and persist
+  
+      // 6) Commit messages + title suggestion
       const finalMessages = [...updatedMessages, aiMessage];
       setMessages(finalMessages);
-      saveMessagesToCurrentChat(finalMessages, { suggestedTitle: result.suggestedTitle });
-
-
-
-
-
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "An error occurred.";
+      await saveMessagesToCurrentChat(finalMessages, { suggestedTitle: result.suggestedTitle });
+    } catch (e) {
       setMessages((prev) =>
-        prev.map((msg) => (msg.id === thinkingMessageId ? { ...msg, content: errorMessage } : msg))
+        prev.map((m) => (m.id === thinkingMessageId ? { ...m, content: "An error occurred." } : m))
       );
+      
+    } finally {
+      // Always release optimistic protection so snapshots can take over
+      pendingIdsRef.current.delete(userMessage.id);
+      pendingIdsRef.current.delete(thinkingMessageId);
     }
   };
-
+  
+  
+ 
   // --- render ---------------------------------------------------------------
 
   return (

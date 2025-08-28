@@ -13,6 +13,7 @@ import {
   Timestamp,
   query,
   orderBy,
+  DocumentData,
   type FirestoreDataConverter,
   type DocumentReference,
   type UpdateData,
@@ -23,6 +24,11 @@ import { auth, db } from "@/services/firebase";
 import type { Chat, Message, Artifact, ModelConfig } from "@/types/types";
 import { AVAILABLE_MODELS } from "@/config/modelConfig";
 
+const toFirestoreMessage = (m: Message): DocumentData => {
+  // JSON clone drops undefined and ensures plain data
+  return JSON.parse(JSON.stringify(m)) as unknown as DocumentData;
+};
+
 type SaveOpts = {
   suggestedTitle?: string;
 };
@@ -30,11 +36,11 @@ type SaveOpts = {
 type SaveResult = { artifact?: Artifact; versionNumber?: number; versionIndex?: number };
 
 /** Firestore doc shape (allows FieldValue + an internal preview field). */
-type ChatDoc = Omit<Chat, "createdAt" | "updatedAt"> & {
+type ChatDoc = Omit<Chat, "createdAt" | "updatedAt" | "messages"> & {
   id: string;
   createdAt: number | Timestamp;
   updatedAt: number | Timestamp;
-  /** Stored in Firestore, not part of the public Chat type */
+  messages: DocumentData[];            // <-- Firestore-safe version
   lastMessagePreview?: string;
 };
 
@@ -46,7 +52,7 @@ const toMillis = (v: number | Timestamp): number => {
 const toChat = (d: ChatDoc): Chat => ({
   id: d.id,
   title: d.title,
-  messages: d.messages,
+  messages:d.messages as unknown as Message[],
   artifacts: d.artifacts,
   modelConfig: d.modelConfig,
   createdAt: toMillis(d.createdAt),
@@ -64,7 +70,7 @@ const chatDocConverter: FirestoreDataConverter<ChatDoc> = {
   fromFirestore: (snap) => {
     const data = snap.data() as Record<string, unknown>;
 
-    const messages = Array.isArray(data.messages) ? (data.messages as Message[]) : [];
+    const messages = Array.isArray(data.messages) ? (data.messages as DocumentData[]) : [];
     const artifacts = Array.isArray(data.artifacts) ? (data.artifacts as Artifact[]) : [];
 
     return {
@@ -210,7 +216,9 @@ export function useChats() {
 
       if (partial.title !== undefined) payload.title = partial.title;
       if (partial.modelConfig !== undefined) payload.modelConfig = partial.modelConfig;
-      if (partial.messages !== undefined) payload.messages = partial.messages;
+      if (partial.messages !== undefined) {
+        payload.messages = partial.messages.map(toFirestoreMessage) as unknown as DocumentData[];
+      }
       if (partial.artifacts !== undefined) payload.artifacts = partial.artifacts;
       if (partial.lastMessagePreview !== undefined)
         payload.lastMessagePreview = partial.lastMessagePreview;
@@ -247,7 +255,7 @@ export function useChats() {
         (typeof curr.title === "string" && curr.title.toLowerCase().startsWith("can you"));
 
       const update: UpdateData<ChatDoc> = {
-        messages: nextMessages,
+        messages: nextMessages.map(toFirestoreMessage) as unknown as DocumentData[],
         lastMessagePreview: last,
         updatedAt: serverTimestamp(),
       };
