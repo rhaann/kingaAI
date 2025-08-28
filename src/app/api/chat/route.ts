@@ -197,11 +197,7 @@ async function synthesizeWithLLM({
     "- Keep ~150–250 words. Be clear and professional."
   ].join("\n");
 
-  const payload = {
-    user_query: _message,
-    envelope,
-    sanitized_urls: sanitizedUrls
-  };
+  
 
   const synthesisPrompt =
     `${system}\n\n<sanitized_urls>\n${JSON.stringify(sanitizedUrls, null, 2)}\n</sanitized_urls>\n` +

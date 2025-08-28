@@ -15,6 +15,11 @@ export interface KingaCard {
   sections: KingaCardSection[];
 }
 
+export type ToolEnvelope = {
+  ui?: { mime: "application/kinga.card+json"; content: KingaCard };
+  summary?: string;
+  data?: Record<string, unknown>;
+};
 export type Message = {
   id: string;
   role: "user" | "ai";
@@ -22,6 +27,7 @@ export type Message = {
   artifactId?: string;
   artifactVersion?: number; 
   card?: KingaCard;
+  rawEnvelopes?: ToolEnvelope[]; 
 };
 
 export type ModelProvider = 'OpenAI' | 'Google' | 'Anthropic';

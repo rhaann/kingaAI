@@ -4,7 +4,7 @@ import SideMenu from "@/components/sideMenu";
 import { FileText, Edit3, X, Check, ChevronRight } from "lucide-react";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useChats } from "@/hooks/useChats";
-import { Message, Artifact, ModelConfig, KingaCard } from "@/types/types";
+import { Message, Artifact, ModelConfig, KingaCard, ToolEnvelope } from "@/types/types";
 import { AVAILABLE_MODELS } from "../config/modelConfig";
 import { ExportMenu } from "./exportMenu";
 import MarkdownRenderer from "./markdown";
@@ -346,13 +346,6 @@ export function ChatApplication() {
         ? currentChatArtifacts[currentChatArtifacts.length - 1]
         : null);
 
-    // const versions = fallbackArtifact?.versions ?? [];
-    // const latest = versions.length ? (versions[versions.length - 1].content ?? "") : "";
-    // const versionInfo = versions
-    //   .map((v, i) => `V${i + 1}@${new Date(v.createdAt).toLocaleString()}`)
-    //   .join(", ");
-    
-
     // put this near the top of handleSend (before requestBody)
     function buildDocumentContext(art?: Artifact | null, budget = 12000) {
       if (!art) return undefined;
@@ -404,7 +397,8 @@ export function ChatApplication() {
         role: "ai",
         content: result.output || "No response",
       };
-      if (result.rawEnvelopes) (aiMessage as any).rawEnvelopes = result.rawEnvelopes;
+      aiMessage.rawEnvelopes = result.rawEnvelopes as ToolEnvelope[] | undefined;
+
       
       if (result.card) aiMessage.card = result.card as KingaCard;
 
@@ -507,7 +501,7 @@ export function ChatApplication() {
                   // Try to parse JSON for structured display
                   let parsed: unknown = null;
                   let isRecord = false;
-                  const rawEnvelopes = (message as any).rawEnvelopes as unknown[] | undefined;
+                  const rawEnvelopes = message.rawEnvelopes;
                   const hasRawToggles = Array.isArray(rawEnvelopes) && rawEnvelopes.length > 0;
 
                   try {
@@ -557,30 +551,36 @@ export function ChatApplication() {
                               <MarkdownRenderer content={contentStr} />
 
                               {/* raw toggles, one per envelope */}
-                              {hasRawToggles && (
-                                <div className="mt-3 space-y-3">
-                                  {rawEnvelopes!.map((env: any, idx: number) => {
-                                    const hasCard =
-                                      env?.ui?.mime === "application/kinga.card+json" && env?.ui?.content;
-                                    const prettyTitle =
-                                      env?.ui?.content?.title || env?.summary || "Details";
-                                    return (
-                                      <details key={idx} className="group rounded-lg border border-border bg-background mt-2">
-                                        <summary className="cursor-pointer list-none px-3 py-2 text-sm font-medium text-secondary-foreground flex items-center justify-between">
-                                          <span className="text-foreground">{prettyTitle}</span>
-                                          <ChevronRight className="w-4 h-4 transition-transform group-open:rotate-90" />
-                                        </summary>
-                                        <div className="px-3 pb-3">
-                                          {hasCard ? (
-                                            <StructuredCard card={env.ui.content as KingaCard} frameless />
-                                          ) : (
-                                            <StructuredCard data={env?.data ?? env} title={prettyTitle} frameless />
-                                          )}
-                                        </div>
-                                      </details>
-                                    );
-                                  })}
-                                </div>
+                              {rawEnvelopes && rawEnvelopes.length > 0 && (
+                                  <div className="mt-3 space-y-3">
+                                    {rawEnvelopes.map((env, idx) => {
+                                      const card =
+                                        env.ui?.mime === "application/kinga.card+json" ? env.ui.content : undefined;
+                                      const prettyTitle = card?.title ?? env.summary ?? "Details";
+                                      return (
+                                        <details
+                                          key={idx}
+                                          className="group rounded-lg border border-border bg-background mt-2"
+                                        >
+                                          <summary className="cursor-pointer list-none px-3 py-2 text-sm font-medium text-secondary-foreground flex items-center justify-between">
+                                            <span className="text-foreground">{prettyTitle}</span>
+                                            <ChevronRight className="w-4 h-4 transition-transform group-open:rotate-90" />
+                                          </summary>
+                                          <div className="px-3 pb-3">
+                                            {card ? (
+                                              <StructuredCard card={card} frameless />
+                                            ) : (
+                                              <StructuredCard
+                                                data={env.data ?? (env as unknown)}
+                                                title={prettyTitle}
+                                                frameless
+                                              />
+                                            )}
+                                          </div>
+                                        </details>
+                                      );
+                                    })}
+                                  </div>
                               )}
 
                               {/* if someone pasted a JSON-ish record as a message, still show it nicely */}
