@@ -163,7 +163,7 @@ function renderWithLinks(text: string) {
       parts.push(<span key={`t-${lastIndex}`}>{text.slice(lastIndex, idx)}</span>);
     }
 
-    const labelFromMd = m[1];
+    
     const link = (m[2] || m[3]) ?? "";
 
     if (link.startsWith("mailto:")) {
