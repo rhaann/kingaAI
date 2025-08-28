@@ -111,40 +111,100 @@ function beautifyLabel(key: string): string {
     .replace(/^./, (c) => c.toUpperCase());
 }
 
+
+// Clean a URL for display: domain.com/path (no protocol, no query/hash, drop trailing slash)
+function cleanUrlForDisplay(raw: string): string {
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.replace(/^www\./, ""); // prefer domain.com over www.domain.com
+    const path = u.pathname === "/" ? "" : u.pathname.replace(/\/$/, "");
+    return host + path;
+  } catch {
+    // Fallback for non-absolute URLs
+    const noProto = raw.replace(/^https?:\/\//i, "");
+    const noWww = noProto.replace(/^www\./i, "");
+    return noWww.split(/[?#]/)[0].replace(/\/$/, "");
+  }
+}
+
+// Normalize sloppy markdown like "[x] (url)" and remove duplicates "[x](url) (url)"
+function normalizeLinkMarkup(s: string): string {
+  if (!s) return s;
+  // remove space between ] (
+  s = s.replace(/\[([^\]]+)\]\s+\((https?:\/\/[^\s)]+)\)/g, "[$1]($2)");
+  // drop duplicate raw url right after the markdown link
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)\s*\(\2\)/g, "[$1]($2)");
+  return s;
+}
+
+
 /**
  * Detect URLs inside a string and render them as clickable links.
  */
 function renderWithLinks(text: string) {
   if (!text) return <span className="text-foreground/80">—</span>;
-  const urlRe =
-    /\bhttps?:\/\/[^\s)]+/gi;
+
+  // Fix bad markdown spacing and duplicates first
+  text = normalizeLinkMarkup(text);
+
+  // Match either a markdown link OR a raw URL/mailto
+  const re =
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^)]+)\)|(https?:\/\/[^\s)]+|mailto:[^\s)]+)/gi;
+
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = urlRe.exec(text)) !== null) {
-    const { index } = match;
-    if (index > lastIndex) {
-      parts.push(<span key={`t-${index}`}>{text.slice(lastIndex, index)}</span>);
+  let m: RegExpExecArray | null;
+
+  while ((m = re.exec(text)) !== null) {
+    const idx = m.index;
+
+    // Push preceding plain text
+    if (idx > lastIndex) {
+      parts.push(<span key={`t-${lastIndex}`}>{text.slice(lastIndex, idx)}</span>);
     }
-    const url = match[0];
-    parts.push(
-      <a
-        key={`a-${index}`}
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="underline underline-offset-2"
-      >
-        {url}
-      </a>
-    );
-    lastIndex = index + url.length;
+
+    const labelFromMd = m[1];
+    const link = (m[2] || m[3]) ?? "";
+
+    if (link.startsWith("mailto:")) {
+      const email = link.replace(/^mailto:/i, "");
+      parts.push(
+        <a
+          key={`a-${idx}`}
+          href={link}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline underline-offset-2"
+        >
+          {email}
+        </a>
+      );
+    } else {
+      const display = cleanUrlForDisplay(link); // ← show only domain.com/path
+      parts.push(
+        <a
+          key={`a-${idx}`}
+          href={link}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline underline-offset-2"
+        >
+          {display}
+        </a>
+      );
+    }
+
+    lastIndex = idx + m[0].length; // consume the whole token (so we don't show "(url)" after)
   }
+
+  // Tail
   if (lastIndex < text.length) {
-    parts.push(<span key={`t-end`}>{text.slice(lastIndex)}</span>);
+    parts.push(<span key="t-end">{text.slice(lastIndex)}</span>);
   }
+
   return parts.length ? parts : <span className="text-foreground/80">—</span>;
 }
+
 
 type Props = {
   content: string;

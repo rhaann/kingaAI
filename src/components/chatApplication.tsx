@@ -395,17 +395,8 @@ export function ChatApplication() {
     try {
       // 4) Call your API (now includes chatId)
       const { result } = await callChatApi({ ...requestBody, chatId });
+      console.log("[chat] result keys:", Object.keys(result || {}), result?.rawEnvelopes?.length);
 
-      // Optional debug logs
-
-      // Update chat title if server suggested one
-      // if (result?.suggestedTitle && chatId) {
-      //   if (typeof updateChatTitle === "function") {
-      //     await updateChatTitle(chatId, result.suggestedTitle);
-      //   } else if (typeof updateChat === "function") {
-      //     await updateChat(chatId, { title: result.suggestedTitle });
-      //   }
-      // }
 
       // 5) Build assistant message
       const aiMessage: Message = {
@@ -413,6 +404,8 @@ export function ChatApplication() {
         role: "ai",
         content: result.output || "No response",
       };
+      if (result.rawEnvelopes) (aiMessage as any).rawEnvelopes = result.rawEnvelopes;
+      
       if (result.card) aiMessage.card = result.card as KingaCard;
 
       // 6) Artifact handling
@@ -514,6 +507,8 @@ export function ChatApplication() {
                   // Try to parse JSON for structured display
                   let parsed: unknown = null;
                   let isRecord = false;
+                  const rawEnvelopes = (message as any).rawEnvelopes as unknown[] | undefined;
+                  const hasRawToggles = Array.isArray(rawEnvelopes) && rawEnvelopes.length > 0;
 
                   try {
                     if (/^\s*[{[]/.test(contentStr)) {
@@ -524,18 +519,18 @@ export function ChatApplication() {
                   } catch {
                     // not JSON — ignore and let markdown handle it
                   }
-
                   const isKingaCardFromParsed = isRecord && Array.isArray((parsed as { sections?: unknown[] } | null)?.sections);
-                  const isCardMsg = !!message.card || isKingaCardFromParsed;
+                  const willRenderCardFallback =!hasRawToggles && !contentStr.trim() && (!!message.card || isKingaCardFromParsed);
 
-                  const bubbleClass = isCardMsg
+
+
+                  const bubbleClass = willRenderCardFallback
                     ? "max-w-full sm:max-w-[90%] md:max-w-[75%] lg:max-w-[65%] p-0"
-                    : `max-w-full sm:max-w-[90%] md:max-w-[75%] lg:max-w-[65%]
+                    : `max-w-full sm:max-w-[90%] md-max-w-[75%] lg:max-w-[65%]
                         rounded-2xl p-3 sm:p-4 shadow-sm border
-                        ${isUser
-                          ? "bg-turquoise text-white border-turquoise/60"
-                          : "bg-secondary text-secondary-foreground border-border"
-                        }`;
+                        ${isUser ? "bg-turquoise text-white border-turquoise/60"
+                                : "bg-secondary text-secondary-foreground border-border"}`;
+
 
                   return (
                     <div
@@ -543,23 +538,62 @@ export function ChatApplication() {
                       className={`flex ${isUser ? "justify-end" : "justify-start"}`}
                     >
                       <div className={bubbleClass}>
-                        {message.content === "..." ? (
-                          // typing dots
-                          <div className="flex items-center space-x-1">
-                            <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" />
-                            <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce [animation-delay:0.1s]" />
-                            <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce [animation-delay:0.2s]" />
-                          </div>
-                        ) : isCardMsg ? (
-                          <StructuredCard
-                            card={(message.card ?? (parsed as KingaCard))}
-                            
-                          />
-                        ) : isRecord ? (
-                          <StructuredCard data={parsed}  />
-                        ) : (
-                          <MarkdownRenderer content={contentStr} />
-                        )}
+                        {message.content === "..."
+                        ? (
+                            // typing dots
+                            <div className="flex items-center space-x-1">
+                              <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" />
+                              <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce [animation-delay:0.1s]" />
+                              <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce [animation-delay:0.2s]" />
+                            </div>
+                          )
+                        : willRenderCardFallback
+                        ? (
+                            <StructuredCard card={(message.card ?? (parsed as KingaCard))} />
+                          )
+                        : (
+                            <>
+                              {/* always show the interpreted answer first */}
+                              <MarkdownRenderer content={contentStr} />
+
+                              {/* raw toggles, one per envelope */}
+                              {hasRawToggles && (
+                                <div className="mt-3 space-y-3">
+                                  {rawEnvelopes!.map((env: any, idx: number) => {
+                                    const hasCard =
+                                      env?.ui?.mime === "application/kinga.card+json" && env?.ui?.content;
+                                    const prettyTitle =
+                                      env?.ui?.content?.title || env?.summary || "Details";
+                                    return (
+                                      <details key={idx} className="group rounded-lg border border-border bg-background mt-2">
+                                        <summary className="cursor-pointer list-none px-3 py-2 text-sm font-medium text-secondary-foreground flex items-center justify-between">
+                                          <span className="text-foreground">{prettyTitle}</span>
+                                          <ChevronRight className="w-4 h-4 transition-transform group-open:rotate-90" />
+                                        </summary>
+                                        <div className="px-3 pb-3">
+                                          {hasCard ? (
+                                            <StructuredCard card={env.ui.content as KingaCard} frameless />
+                                          ) : (
+                                            <StructuredCard data={env?.data ?? env} title={prettyTitle} frameless />
+                                          )}
+                                        </div>
+                                      </details>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              {/* if someone pasted a JSON-ish record as a message, still show it nicely */}
+                              {!isUser && isRecord && !hasRawToggles && (
+                                <div className="mt-3">
+                                  <StructuredCard data={parsed} frameless />
+                                </div>
+                              )}
+                            </>
+                          )
+                        }
+
+                        
 
                         {message.artifactId && (
                           <button
