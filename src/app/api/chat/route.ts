@@ -135,43 +135,47 @@ function cleanUrl(raw: string): string {
 
 /** Build a map of raw->clean URLs from common envelope fields. */
 function buildSanitizedUrlsMap(envelope: unknown): Record<string, string> {
-  const out: Record<string, string> = {};
-  const add = (u?: string) => {
-    if (!u || typeof u !== "string") return;
-    out[u] = cleanUrl(u);
+  type Finding = { source?: unknown };
+  type Minimal = {
+    data?: {
+      website?: unknown;
+      linkedin_url?: unknown;
+      findings?: Finding[];
+    };
+    meta?: { source?: unknown };
   };
 
-  try {
-    const e = envelope as any;
-    add(e?.data?.website);
-    add(e?.data?.linkedin_url);
+  const out: Record<string, string> = {};
+  const add = (u: unknown) => {
+    if (typeof u === "string" && u.trim()) out[u] = cleanUrl(u);
+  };
 
-    // search findings
-    const findings = e?.data?.findings;
-    if (Array.isArray(findings)) {
-      for (const f of findings) add(f?.source);
+  if (envelope && typeof envelope === "object") {
+    const e = envelope as Minimal;
+
+    add(e.data?.website);
+    add(e.data?.linkedin_url);
+
+    if (Array.isArray(e.data?.findings)) {
+      for (const f of e.data.findings) add(f?.source);
     }
 
-    // meta.sources array
-    const srcs = e?.meta?.source;
-    if (Array.isArray(srcs)) {
-      for (const s of srcs) add(s);
+    if (Array.isArray(e.meta?.source)) {
+      for (const s of e.meta.source as unknown[]) add(s);
     }
-  } catch {
-    /* ignore */
   }
+
   return out;
 }
 
+
 async function synthesizeWithLLM({
   envelope,
-  message: _message,
   modelConfig,
   conversationHistory = [],
   documentContext,
 }: {
   envelope: unknown;
-  message: string;
   modelConfig: ModelConfig;
   conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
   documentContext?: string;
@@ -376,7 +380,6 @@ export async function POST(req: NextRequest) {
 
         const output = await synthesizeWithLLM({
           envelope,
-          message,
           modelConfig: modelConfig!,
           conversationHistory,
           documentContext,
@@ -443,7 +446,6 @@ export async function POST(req: NextRequest) {
 
         const output = await synthesizeWithLLM({
           envelope,
-          message,
           modelConfig: modelConfig!,
           conversationHistory,
           documentContext,
@@ -493,7 +495,6 @@ export async function POST(req: NextRequest) {
 
         const output = await synthesizeWithLLM({
           envelope,
-          message,
           modelConfig: modelConfig!,
           conversationHistory,
           documentContext,
