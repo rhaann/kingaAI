@@ -74,8 +74,8 @@ export default function StructuredCard({
 
   const { title: cardTitle, summary, sections } = resolved;
   const containerClass = frameless
-  ? "p-3 sm:p-4 md:p-5"
-  : "rounded-2xl border border-neutral-200/20 bg-neutral-800/60 text-neutral-50 shadow-sm p-6 md:p-7 dark:border-neutral-700/40";
+  ? "p-3 sm:p-4 md:p-5 text-foreground"
+  : "rounded-2xl border bg-card text-card-foreground border-border shadow-sm p-6 md:p-7";
 
 
 
@@ -86,14 +86,14 @@ export default function StructuredCard({
       </div>
 
       {summary ? (
-        <div className="mb-5 text-base text-neutral-300">{summary}</div>
+        <div className="mb-5 text-base text-muted-foreground">{summary}</div>
       ) : null}
 
       <div className="space-y-5">
         {sections?.map((section, idx) => (
           <div key={idx}>
             {section.title ? (
-              <div className="mb-2 font-medium text-neutral-200">
+              <div className="mb-2 font-medium text-foreground">
                 {section.title}
               </div>
             ) : null}
@@ -103,7 +103,7 @@ export default function StructuredCard({
                 const isUrl = /^https?:\/\//i.test(it.value);
                 return (
                   <React.Fragment key={key}>
-                    <dt className="text-neutral-400">{it.label}:</dt>
+                    <dt className="text-muted-foreground">{it.label}:</dt>
                     <dd className="break-words relative group min-w-0">
                       {isUrl ? (
                         <a
@@ -122,7 +122,7 @@ export default function StructuredCard({
                       <button
                         type="button"
                         onClick={() => copy(String(it.value ?? ""), key)}
-                        className="ml-3 inline-flex items-center rounded-md border border-neutral-500/40 px-2 py-0.5 text-xs opacity-0 transition group-hover:opacity-100 hover:border-neutral-400"
+                        className="ml-3 inline-flex items-center rounded-md border border-border px-2 py-0.5 text-xs opacity-0 transition group-hover:opacity-100 hover:border-foreground/40"
                         aria-label={`Copy ${it.label}`}
                         title={`Copy ${it.label}`}
                       >

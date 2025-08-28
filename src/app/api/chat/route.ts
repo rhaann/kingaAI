@@ -31,6 +31,7 @@ type ApiResult = {
   card?: KingaCard;
   artifact?: ArtifactEnvelope; 
   suggestedTitle?: string;
+  rawEnvelopes?: unknown[];
 };
 
 
@@ -114,6 +115,53 @@ async function readToolFlags(userId: string): Promise<{ [key: string]: boolean }
   return defaults;
 }
 
+/** Clean URL for display: domain.com/path (no protocol, query, or hash). Truncate long paths. */
+function cleanUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    const host = u.hostname;
+    const path = u.pathname === "/" ? "" : u.pathname.replace(/\/$/, "");
+    const trimmed = path.length > 60 ? path.slice(0, 60) + "…" : path;
+    return host + trimmed;
+  } catch {
+    // Best-effort for non-absolute URLs
+    const noQuery = raw.split("?")[0].split("#")[0].replace(/^https?:\/\//, "");
+    const [host, ...rest] = noQuery.split("/");
+    const path = rest.length ? "/" + rest.join("/") : "";
+    const trimmed = path.length > 60 ? path.slice(0, 60) + "…" : path;
+    return host + trimmed;
+  }
+}
+
+/** Build a map of raw->clean URLs from common envelope fields. */
+function buildSanitizedUrlsMap(envelope: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  const add = (u?: string) => {
+    if (!u || typeof u !== "string") return;
+    out[u] = cleanUrl(u);
+  };
+
+  try {
+    const e = envelope as any;
+    add(e?.data?.website);
+    add(e?.data?.linkedin_url);
+
+    // search findings
+    const findings = e?.data?.findings;
+    if (Array.isArray(findings)) {
+      for (const f of findings) add(f?.source);
+    }
+
+    // meta.sources array
+    const srcs = e?.meta?.source;
+    if (Array.isArray(srcs)) {
+      for (const s of srcs) add(s);
+    }
+  } catch {
+    /* ignore */
+  }
+  return out;
+}
 
 async function synthesizeWithLLM({
   envelope,
@@ -128,11 +176,37 @@ async function synthesizeWithLLM({
   conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
   documentContext?: string;
 }): Promise<string> {
+  const sanitizedUrls = buildSanitizedUrlsMap(envelope);
+
+  const system = [
+    "You are a results interpreter. Turn tool envelopes into a unified, conversational answer.",
+    "Rules:",
+    "- Base your answer ONLY on the envelope.",
+    "- Do not mention which tool produced the data; no section headers or tool names.",
+    "- Start with a 2–3 sentence summary that answers the user directly.",
+    "- If the envelope includes a list (findings/results/items/records), weave in up to THREE concise items.",
+    "- Dates should appear inline when present (e.g., “(2024-05-01–present)”).",
+    "- Emails may be shown in full. Do NOT include internal IDs (companyId, contactId, runId, etc.).",
+    "- URLs: when you include a link, render it as Markdown `[clean-domain.com/path](RAW_URL)`. Use <sanitized_urls> to map raw → clean. One link per bullet/line; no link lists.",    "- If the envelope indicates limitations/notes or partial access, append ONE italicized line at the end starting with “Note:” (no links there).",
+    "- If status is failure or required fields are missing, give a brief, neutral explanation and a simple next step.",
+    "- If you’re uncertain, say what’s missing and ask ONE clarifying question at the end.",
+    "- Never repeat the raw URL after the Markdown link; do not append (URL) after [text](URL).",
+    "- No space between the closing ']' and opening '(' in a link.",
+    "- For links, output the bare clean URL text only: domain.com/path (no protocol, no []() Markdown).",
+    "- Do not append the raw URL in parentheses after a link.",
+    "- Keep ~150–250 words. Be clear and professional."
+  ].join("\n");
+
+  const payload = {
+    user_query: _message,
+    envelope,
+    sanitized_urls: sanitizedUrls
+  };
+
   const synthesisPrompt =
-    "You are helping the user. Interpret the tool results below and produce a concise, helpful answer. " +
-    "If sources are present (envelope.meta.source), cite them briefly. Avoid dumping raw JSON.\n\n" +
-    `<tool_json v="1">\n${JSON.stringify(envelope)}\n</tool_json>`;
-  void _message;
+    `${system}\n\n<sanitized_urls>\n${JSON.stringify(sanitizedUrls, null, 2)}\n</sanitized_urls>\n` +
+    `<envelope>\n${JSON.stringify(envelope)}\n</envelope>`;
+
   const llm = await sendMessage(synthesisPrompt, {
     modelConfig,
     conversationHistory,
@@ -142,6 +216,7 @@ async function synthesizeWithLLM({
 
   return llm.type === "text" ? (llm.content ?? "") : "Here’s what I found.";
 }
+
 
 /** Ask the LLM to propose a short chat title (tools disabled). */
 async function generateChatTitleWithLLM({
@@ -317,9 +392,12 @@ export async function POST(req: NextRequest) {
             llmTitle ||
             (agent_query.length > 60 ? agent_query.slice(0, 57) + "…" : agent_query) ||
             "Search",
+          rawEnvelopes: [envelope],
         };
+        
         return NextResponse.json({ result });
       }
+      
 
       // MCP: CRM
       if (toolName === "crm") {
@@ -380,6 +458,7 @@ export async function POST(req: NextRequest) {
           output,
           card,
           suggestedTitle: llmTitle || `CRM · ${prettyEntity}`,
+          rawEnvelopes: [envelope],
         };
         return NextResponse.json({ result });
       }
@@ -427,6 +506,7 @@ export async function POST(req: NextRequest) {
           output,
           card,
           suggestedTitle: llmTitle || "Email result",
+          rawEnvelopes: [envelope],
         };
         return NextResponse.json({ result });
       }
