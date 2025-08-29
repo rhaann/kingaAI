@@ -19,11 +19,6 @@ import { buildConversationHistory } from "@/lib/chat/buildConversationHistory";
 import { auth, db } from "@/services/firebase";
 import { collection, getDocs } from "firebase/firestore";
 
-type SaveResult = {
-  artifact?: Artifact;
-  versionNumber?: number;
-  versionIndex?: number;
-};
 type ChatLike = {
   messages?: Message[];
   modelConfig?: Partial<ModelConfig>;
@@ -59,6 +54,7 @@ export function ChatApplication() {
 
   
   const pendingIdsRef = useRef<Set<string>>(new Set());
+  
 
 
   useEffect(() => {
@@ -73,44 +69,35 @@ export function ChatApplication() {
   
     // only on chat change
     closeArtifact();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentChatId]);
   
-
   useEffect(() => {
     const chat = chats.find((c) => c.id === currentChatId);
     if (!chat) return;
   
     const c = chat as ChatLike;
     const serverMsgs: Message[] = Array.isArray(c.messages) ? c.messages : [];
-  
-    // Build a set of ids from the server snapshot
     const serverIds = new Set(serverMsgs.map((m) => m.id));
   
-    // Collect optimistic messages we’ve added locally that the server
-    // hasn’t echoed yet (using the ids we tracked in the ref)
-    const optimisticMissing: Message[] = Array.from(pendingIdsRef.current)
-      .map((id) => messages.find((m) => m.id === id))
-      .filter((m): m is Message => !!m)
-      .filter((m) => !serverIds.has(m.id));
+    // Use functional updater: no need for messagesRef or messages in deps
+    setMessages((prev) => {
+      const optimisticMissing = Array.from(pendingIdsRef.current)
+        .map((id) => prev.find((m) => m.id === id))
+        .filter((m): m is Message => !!m)
+        .filter((m) => !serverIds.has(m.id));
   
-    // Adopt the server snapshot, plus any still-missing optimistic messages.
-    // (No dependency issues: deps array remains a fixed size.)
-    const stitched =
-      optimisticMissing.length > 0 ? serverMsgs.concat(optimisticMissing) : serverMsgs;
+      const stitched = optimisticMissing.length
+        ? serverMsgs.concat(optimisticMissing)
+        : serverMsgs;
   
-    // Only set when actually different to avoid extra renders
-    const changed =
-      messages.length !== stitched.length ||
-      messages.some((m, i) => m.id !== stitched[i]?.id);
-    if (changed) setMessages(stitched);
+      const changed =
+        prev.length !== stitched.length ||
+        prev.some((m, i) => m.id !== stitched[i]?.id);
   
-    // Any optimistic ids that the server *has* now echoed can be dropped
-    for (const id of Array.from(pendingIdsRef.current)) {
-      if (serverIds.has(id)) pendingIdsRef.current.delete(id);
-    }
+      return changed ? stitched : prev;
+    });
   
-    // Keep your artifact pane sync the same as before
+    // keep artifact pane in sync
     if (currentArtifact) {
       const updated = c.artifacts?.find?.((a: Artifact) => a.id === currentArtifact.id);
       if (updated) {
@@ -119,8 +106,7 @@ export function ChatApplication() {
         setCurrentVersionIndex((i) => Math.min(i, maxIdx));
       }
     }
-  }, [chats, currentChatId]); // ← keep deps EXACTLY like this
-  
+  }, [chats, currentChatId, currentArtifact]);
   
   
 
@@ -471,7 +457,7 @@ export function ChatApplication() {
       const finalMessages = [...updatedMessages, aiMessage];
       setMessages(finalMessages);
       await saveMessagesToCurrentChat(finalMessages, { suggestedTitle: result.suggestedTitle });
-    } catch (e) {
+    } catch {
       setMessages((prev) =>
         prev.map((m) => (m.id === thinkingMessageId ? { ...m, content: "An error occurred." } : m))
       );
