@@ -14,8 +14,8 @@ import ChatInputBox from "@/components/chatInputBox";
 import { callChatApi } from "@/lib/client/callChatApi";
 import { buildConversationHistory } from "@/lib/chat/buildConversationHistory";
 
-import { auth, db } from "@/services/firebase";
-import { collection, getDocs } from "firebase/firestore";
+import { auth } from "@/services/firebase";
+  // import { collection, getDocs } from "firebase/firestore";
 
 export function ChatApplication() {
   const { resolvedTheme } = useTheme();
@@ -34,7 +34,14 @@ export function ChatApplication() {
     loadChat,
   } = useChats();
 
-  const lastContextRef = useRef<any | null>(null);
+  type EmailishContext = {
+    email?: string;
+    Email?: string;
+    contact?: { email?: string } | null;
+    person?: { email?: string } | null;
+    [key: string]: unknown;
+  };
+  const lastContextRef = useRef<EmailishContext | null>(null);
 
 
   // Simple “send email” intent (align with server-side logic)
@@ -58,7 +65,7 @@ export function ChatApplication() {
     const chat = chats.find((c) => c.id === currentChatId);
     if (!chat) return; 
   
-    const mc = (chat as any).modelConfig;
+    const mc = chat.modelConfig;
     const byId   = mc?.id   ? AVAILABLE_MODELS.find((m) => m.id === mc.id)   : null;
     const byName = mc?.name ? AVAILABLE_MODELS.find((m) => m.name === mc.name) : null;
     setSelectedModel(byId || byName || AVAILABLE_MODELS[0]);
@@ -71,7 +78,7 @@ export function ChatApplication() {
     const chat = chats.find((c) => c.id === currentChatId);
     if (!chat) return;
   
-    const serverMsgs: Message[] = Array.isArray((chat as any).messages) ? (chat as any).messages : [];
+    const serverMsgs: Message[] = Array.isArray(chat.messages) ? chat.messages : [];
     const serverIds = new Set(serverMsgs.map((m) => m.id));
   
     // Use functional updater: no need for messagesRef or messages in deps
@@ -125,8 +132,8 @@ export function ChatApplication() {
       if (!uid) return defaults;
   
       // 1) Try per-user collection: users/{uid}/toolPermissions/{toolId}
-      const perUserCol = collection(db, "users", uid, "toolPermissions");
-      const perUserSnap = await getDocs(perUserCol);
+      // const perUserCol = collection(db, "users", uid, "toolPermissions");
+      // const perUserSnap = await getDocs(perUserCol);
       
   
     } catch (e) {
@@ -248,10 +255,10 @@ export function ChatApplication() {
       const finalMessages: Message[] = [...updatedMessages, { id: thinkingMessageId, role: "ai", content: aiContent }];
       setMessages(finalMessages);
       await saveMessagesToCurrentChat(finalMessages, { suggestedTitle: result?.suggestedTitle });
-    } catch (e) {
+    } catch (e: unknown) {
       // Show a friendly error in the typing bubble place
       setMessages(prev =>
-        prev.map(m => (m.id === thinkingMessageId ? { ...m, content: "An error occurred." } : m))
+        prev.map(m => (m.id === thinkingMessageId ? { ...m, content: `An error occurred: ${e}`} : m))
       );
     } finally {
       // Release optimistic protection so snapshots can reconcile

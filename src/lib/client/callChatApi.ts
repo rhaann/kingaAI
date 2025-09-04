@@ -10,10 +10,19 @@ export type ChatApiBody = Record<string, unknown>;
  * - Adds Firebase ID token as Authorization header when available
  * - Throws on non-2xx responses (caller should catch)
  */
+export type ChatApiResult = {
+  result: {
+    output?: string | null;
+    context?: Record<string, unknown> | null;
+    suggestedTitle?: string;
+    [key: string]: unknown;
+  };
+};
+
 export async function callChatApi(
   body: ChatApiBody,
   endpoint: string = "/api/chat"
-): Promise<any> {
+): Promise<ChatApiResult> {
   const user = auth.currentUser;
   const idToken = user ? await user.getIdToken() : undefined;
 
@@ -31,5 +40,5 @@ export async function callChatApi(
     throw new Error(text || `${res.status} ${res.statusText}`);
   }
 
-  return res.json();
+  return (await res.json()) as ChatApiResult;
 }

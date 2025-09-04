@@ -77,10 +77,11 @@ export const googleDriveSave = functions.https.onRequest(async (request, respons
       await userDocRef.set({ googleDriveTokens: newTokens }, { merge: true });
     }
     response.status(200).json({ success: true, fileUrl: file.webViewLink });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Save to Drive failed:", error);
-    if (error.code) {
-      response.status(400).json({ error: error.message });
+    const err = error as { code?: string | number; message?: string } | null;
+    if (err && err.code) {
+      response.status(400).json({ error: err.message || "Bad Request" });
     } else {
       response.status(500).json({ error: "An internal error occurred." });
     }
@@ -123,7 +124,7 @@ export const n8nCallback = functions.https.onRequest(async (request, response) =
     });
 
     response.status(200).json({ success: true, message: 'Callback received and processed.' });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error in n8nCallback function:", error);
     response.status(500).json({ error: 'Internal Server Error' });
   }
