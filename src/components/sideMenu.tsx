@@ -80,7 +80,7 @@ export default function SideMenu({
 
   return (
     <aside
-      className={`flex flex-col h-screen bg-background border-r border-border transition-all duration-300 ${
+      className={`hidden md:flex flex-col h-screen bg-background border-r border-border transition-all duration-300 ${
         collapsed ? "w-20" : "w-80"
       }`}
     >

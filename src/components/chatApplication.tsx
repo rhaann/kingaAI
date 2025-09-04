@@ -46,6 +46,24 @@ export function ChatApplication() {
     loadChat,
   } = useChats();
 
+  const lastContextRef = useRef<any | null>(null);
+
+
+  // Simple “send email” intent (keep it broad but not overfitted)
+  function wantsEmailLocal(s: string): boolean {
+    const m = s.toLowerCase();
+    return /\b(send|draft|write)\s+(an\s+)?email\b|\bemail\s+(him|her|them|me|us|the\s+person|the\s+team)\b/.test(m);
+  }
+
+  // Minimal email validator
+  function isValidEmail(val: unknown): val is string {
+    if (typeof val !== "string") return false;
+    const s = val.trim();
+    // simple, safe, and good enough for preflight
+    return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(s);
+  }
+
+
   const currentChat = useMemo(
     () => chats.find((chat) => chat.id === currentChatId) || null,
     [chats, currentChatId]
@@ -189,10 +207,12 @@ export function ChatApplication() {
   }, [messages]);
 
   const handleNewChat = async () => {
+    lastContextRef.current = null;            // NEW
     await createNewChat(selectedModel);
   };
 
   const handleSelectChat = (chatId: string) => {
+    lastContextRef.current = null;            // NEW
     loadChat(chatId);
   };
 
@@ -333,7 +353,7 @@ export function ChatApplication() {
   const handleSend = async (messageContent: string) => {
     if (!messageContent.trim()) return;
   
-    // Ensure chatId (create one if needed)
+    // Ensure we have a chatId (create one if needed)
     let chatId = currentChatId;
     if (!chatId) {
       const newId = await createNewChat(selectedModel);
@@ -341,7 +361,7 @@ export function ChatApplication() {
       chatId = newId;
     }
   
-    // 1) Optimistic user message
+    // 1) Optimistic user message + typing bubble
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: "user",
@@ -349,15 +369,67 @@ export function ChatApplication() {
     };
     const thinkingMessageId = crypto.randomUUID();
   
-    const updatedMessages = [...messages, userMessage];
-    setMessages(updatedMessages); // show user message immediately
-    setMessages((prev) => [...prev, { id: thinkingMessageId, role: "ai", content: "..." }]); // typing bubble
-  
-    // Track optimistic IDs so the snapshot guard won’t wipe them
+    setMessages(prev => [
+      ...prev,
+      userMessage,
+      { id: thinkingMessageId, role: "ai", content: "..." },
+    ]);
     pendingIdsRef.current.add(userMessage.id);
     pendingIdsRef.current.add(thinkingMessageId);
   
-    // 2) Prepare request
+    // 2) Email preflight (only if the user intent is "send email")
+    const sendEmailIntent = wantsEmailLocal(messageContent);
+  
+    // try to get an email from last context first, then fall back to one typed in this message
+    const ctx = lastContextRef.current || null;
+    const emailFromContext =
+      ctx?.email ??
+      ctx?.Email ??
+      ctx?.contact?.email ??
+      ctx?.person?.email ??
+      null;
+  
+    const emailFromMessage =
+      messageContent.match(/\b[^\s@]+@[^\s@]+\.[^\s@]{2,}\b/i)?.[0] ?? null;
+  
+    const candidateEmail = emailFromContext || emailFromMessage;
+  
+    if (sendEmailIntent) {
+      if (!candidateEmail) {
+        // replace typing bubble with a guardrail
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === thinkingMessageId
+              ? {
+                  ...m,
+                  content:
+                    "I don’t have a contact email yet. Ask me to research them first, or include an address (e.g., `email alex@example.com`).",
+                }
+              : m
+          )
+        );
+        pendingIdsRef.current.delete(thinkingMessageId);
+        return;
+      }
+      if (!isValidEmail(candidateEmail)) {
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === thinkingMessageId
+              ? {
+                  ...m,
+                  content: `The email I have (\`${candidateEmail}\`) doesn’t look valid. Please provide a correct address or run a quick search first.`,
+                }
+              : m
+          )
+        );
+        pendingIdsRef.current.delete(thinkingMessageId);
+        return;
+      }
+    }
+  
+    // 3) Prepare request payload for the API
+    const updatedMessages = [...messages, userMessage]; // history for server (exclude typing bubble)
+  
     const conversationHistoryForAPI = buildConversationHistory(updatedMessages);
   
     const fallbackArtifact =
@@ -370,10 +442,7 @@ export function ChatApplication() {
       if (!art) return undefined;
       const versions = art.versions ?? [];
       const index = versions
-        .map(
-          (v, i) =>
-            `V${i + 1}@${new Date(v.createdAt).toLocaleString()} len=${(v.content ?? "").length}`
-        )
+        .map((v, i) => `V${i + 1}@${new Date(v.createdAt).toLocaleString()} len=${(v.content ?? "").length}`)
         .join(", ");
   
       const parts: string[] = [
@@ -403,23 +472,22 @@ export function ChatApplication() {
       currentArtifactId: fallbackArtifact?.id,
       currentArtifactTitle: fallbackArtifact?.title,
       toolFlags,
+      context: lastContextRef.current, // pass prior JSON so WF2 can run
     };
   
     try {
-      // 3) Call API
-      const { result } = await callChatApi({ ...requestBody, chatId });
+      // 4) Call API (Workflow-1 or Workflow-2 decided in the route)
+      const { result } = await callChatApi({ ...requestBody, chatId }, "/api/chat-n8n");
   
-      // 4) Build assistant message
-      const aiMessage: Message = {
-        id: thinkingMessageId,
-        role: "ai",
-        content: result.output ?? "No response",
-      };
-      aiMessage.rawEnvelopes = (result.rawEnvelopes ?? undefined) as ToolEnvelope[] | undefined;
-      if (result.card) aiMessage.card = result.card as KingaCard;
+      // Store fresh context from WF1 so a follow-up "send email" can use it
+      if (result?.context) {
+        lastContextRef.current = result.context;
+      }
   
-      // 5) Artifact handling (replace/append strategy)
-      if (result.artifact) {
+      // Artifact handling (same behavior you had)
+      let aiContent = result?.output ?? "No response";
+  
+      if (result?.artifact) {
         const incoming = result.artifact as Artifact;
   
         const prev = fallbackArtifact;
@@ -435,7 +503,7 @@ export function ChatApplication() {
         };
   
         if (!nextContent.trim()) {
-          aiMessage.content = "No changes detected for the document.";
+          aiContent = "No changes detected for the document.";
         } else {
           const saved = (await saveArtifactToCurrentChat(normalized)) as
             | { artifact?: Artifact; versionNumber?: number; versionIndex?: number }
@@ -447,27 +515,25 @@ export function ChatApplication() {
           const persistedArtifact = saved?.artifact ?? normalized;
   
           openArtifact(persistedArtifact, Math.max(0, (finalVersionNumber ?? 1) - 1));
-          aiMessage.artifactId = persistedArtifact.id;
-          aiMessage.artifactVersion = finalVersionNumber ?? 1;
-          aiMessage.content = result.output ?? "I've updated the document for you.";
         }
       }
   
-      // 6) Commit messages + title suggestion
-      const finalMessages = [...updatedMessages, aiMessage];
+      // 5) Replace typing bubble with the final AI message and persist
+      const finalMessages: Message[] = [...updatedMessages, { id: thinkingMessageId, role: "ai", content: aiContent }];
       setMessages(finalMessages);
-      await saveMessagesToCurrentChat(finalMessages, { suggestedTitle: result.suggestedTitle });
-    } catch {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === thinkingMessageId ? { ...m, content: "An error occurred." } : m))
+      await saveMessagesToCurrentChat(finalMessages, { suggestedTitle: result?.suggestedTitle });
+    } catch (e) {
+      // Show a friendly error in the typing bubble place
+      setMessages(prev =>
+        prev.map(m => (m.id === thinkingMessageId ? { ...m, content: "An error occurred." } : m))
       );
-      
     } finally {
-      // Always release optimistic protection so snapshots can take over
+      // Release optimistic protection so snapshots can reconcile
       pendingIdsRef.current.delete(userMessage.id);
       pendingIdsRef.current.delete(thinkingMessageId);
     }
   };
+  
   
   
  
@@ -500,8 +566,6 @@ export function ChatApplication() {
               <div className="max-w-5xl mx-auto space-y-5">
                 {messages.map((message) => {
                   const isUser = message.role === "user";
-
-                  // Always hold a *string* version for markdown
                   const contentStr =
                     typeof message.content === "string"
                       ? message.content
@@ -516,8 +580,52 @@ export function ChatApplication() {
                   // Try to parse JSON for structured display
                   let parsed: unknown = null;
                   let isRecord = false;
-                  const rawEnvelopes = message.rawEnvelopes;
-                  const hasRawToggles = Array.isArray(rawEnvelopes) && rawEnvelopes.length > 0;
+                  // Raw envelopes coming back from the API
+                  const rawEnvelopes = message.rawEnvelopes as ToolEnvelope[] | undefined;
+
+                  // NEW: Only show envelopes that are not trivial “email sent” acks
+                  const envelopesForDisplay = Array.isArray(rawEnvelopes)
+                    ? rawEnvelopes.filter((env: ToolEnvelope | any) => {
+                        // Keep if it ships a real UI card
+                        if (env?.ui?.mime) return true;
+
+                        // Best-effort plain text
+                        const txt = String(
+                          env?.content ??
+                            env?.data?.content ??
+                            env?.data ??
+                            env?.summary ??
+                            ""
+                        ).trim();
+
+                        // Hide short, simple success acks (we’ll rely on the main bubble text)
+                        const looksLikeEmailAck =
+                          txt.length > 0 &&
+                          txt.length < 160 &&
+                          /email\s+(sent|queued|scheduled|delivered|success)/i.test(txt) &&
+                          !/(\bto:|\bfrom:|\bsubject:|\{|\[|\n.*\n)/i.test(txt); // but keep structured-looking stuff
+
+                        return !looksLikeEmailAck;
+                      })
+                    : [];
+
+                  // Is this reply from the email workflow? (don’t show cards/toggles in that case)
+                  const isEmailReply =
+                  Array.isArray(rawEnvelopes) &&
+                  rawEnvelopes.some((env: any) => {
+                    const tag = String(env?.tool ?? env?.toolId ?? env?.kind ?? env?.source ?? "").toLowerCase();
+                    const sum = String(
+                      env?.summary ?? env?.content ?? env?.data?.content ?? env?.data ?? ""
+                    ).toLowerCase();
+                    // Tag mentions email OR the summary/content reads like an email status
+                    return tag.includes("email") || /email\s+(sent|queued|delivered|success|failed)/i.test(sum);
+                  });
+
+                  const hasRawToggles = !isEmailReply && envelopesForDisplay.length > 0;
+
+
+
+
 
                   try {
                     if (/^\s*[{[]/.test(contentStr)) {
@@ -566,37 +674,38 @@ export function ChatApplication() {
                               <MarkdownRenderer content={contentStr} />
 
                               {/* raw toggles, one per envelope */}
-                              {rawEnvelopes && rawEnvelopes.length > 0 && (
-                                  <div className="mt-3 space-y-3">
-                                    {rawEnvelopes.map((env, idx) => {
-                                      const card =
-                                        env.ui?.mime === "application/kinga.card+json" ? env.ui.content : undefined;
-                                      const prettyTitle = card?.title ?? env.summary ?? "Details";
-                                      return (
-                                        <details
-                                          key={idx}
-                                          className="group rounded-lg border border-border bg-background mt-2"
-                                        >
-                                          <summary className="cursor-pointer list-none px-3 py-2 text-sm font-medium text-secondary-foreground flex items-center justify-between">
-                                            <span className="text-foreground">{prettyTitle}</span>
-                                            <ChevronRight className="w-4 h-4 transition-transform group-open:rotate-90" />
-                                          </summary>
-                                          <div className="px-3 pb-3">
-                                            {card ? (
-                                              <StructuredCard card={card} frameless />
-                                            ) : (
-                                              <StructuredCard
-                                                data={env.data ?? (env as unknown)}
-                                                title={prettyTitle}
-                                                frameless
-                                              />
-                                            )}
-                                          </div>
-                                        </details>
-                                      );
-                                    })}
-                                  </div>
+                              {hasRawToggles && (
+                                <div className="mt-3 space-y-3">
+                                  {envelopesForDisplay.map((env, idx) => {
+                                    const card =
+                                      env.ui?.mime === "application/kinga.card+json" ? env.ui.content : undefined;
+                                    const prettyTitle = card?.title ?? env.summary ?? "Details";
+                                    return (
+                                      <details
+                                        key={idx}
+                                        className="group rounded-lg border border-border bg-background mt-2"
+                                      >
+                                        <summary className="cursor-pointer list-none px-3 py-2 text-sm font-medium text-secondary-foreground flex items-center justify-between">
+                                          <span className="text-foreground">{prettyTitle}</span>
+                                          <ChevronRight className="w-4 h-4 transition-transform group-open:rotate-90" />
+                                        </summary>
+                                        <div className="px-3 pb-3">
+                                          {card ? (
+                                            <StructuredCard card={card} frameless />
+                                          ) : (
+                                            <StructuredCard
+                                              data={env.data ?? (env as unknown)}
+                                              title={prettyTitle}
+                                              frameless
+                                            />
+                                          )}
+                                        </div>
+                                      </details>
+                                    );
+                                  })}
+                                </div>
                               )}
+
 
                               {/* if someone pasted a JSON-ish record as a message, still show it nicely */}
                               {!isUser && isRecord && !hasRawToggles && (
