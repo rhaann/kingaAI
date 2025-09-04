@@ -249,7 +249,7 @@ export function ChatApplication() {
         lastContextRef.current = result.context;
       }
   
-      let aiContent = result?.output ?? "No response";
+      const aiContent = result?.output ?? "No response";
   
       // 5) Replace typing bubble with the final AI message and persist
       const finalMessages: Message[] = [...updatedMessages, { id: thinkingMessageId, role: "ai", content: aiContent }];
@@ -326,14 +326,12 @@ export function ChatApplication() {
 
                   // Try to parse JSON for structured display
                   let parsed: unknown = null;
-                  let isRecord = false;
                   
 
                   try {
                     if (/^\s*[{[]/.test(contentStr)) {
                       parsed = JSON.parse(contentStr);
-                      isRecord =
-                        !!parsed && typeof parsed === "object" && !Array.isArray(parsed);
+                      // parsed is intentionally not used for rendering cards anymore
                     }
                   } catch {
                     // not JSON — ignore and let markdown handle it
