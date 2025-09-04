@@ -325,17 +325,17 @@ export function ChatApplication() {
                         })();
 
                   // Try to parse JSON for structured display
-                  let parsed: unknown = null;
+                  // let parsed: unknown = null;
                   
 
-                  try {
-                    if (/^\s*[{[]/.test(contentStr)) {
-                      parsed = JSON.parse(contentStr);
-                      // parsed is intentionally not used for rendering cards anymore
-                    }
-                  } catch {
-                    // not JSON — ignore and let markdown handle it
-                  }
+                  // try {
+                  //   if (/^\s*[{[]/.test(contentStr)) {
+                  //     parsed = JSON.parse(contentStr);
+                  //     // parsed is intentionally not used for rendering cards anymore
+                  //   }
+                  // } catch {
+                  //   // not JSON — ignore and let markdown handle it
+                  // }
                   // const isKingaCardFromParsed = isRecord && Array.isArray((parsed as { sections?: unknown[] } | null)?.sections);
                   const willRenderCardFallback = false;
 
