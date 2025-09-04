@@ -1,6 +1,9 @@
 "use client";
 
 import SideMenu from "@/components/sideMenu";
+import { Plus } from "lucide-react";
+import Image from "next/image";
+import { useTheme } from "next-themes";
 import { useState, useRef, useEffect } from "react";
 import { useChats } from "@/hooks/useChats";
 import { Message, ModelConfig } from "@/types/types";
@@ -15,6 +18,7 @@ import { auth, db } from "@/services/firebase";
 import { collection, getDocs } from "firebase/firestore";
 
 export function ChatApplication() {
+  const { resolvedTheme } = useTheme();
   const [messages, setMessages] = useState<Message[]>([]);
   const [selectedModel, setSelectedModel] = useState<ModelConfig>(AVAILABLE_MODELS[0]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -33,10 +37,11 @@ export function ChatApplication() {
   const lastContextRef = useRef<any | null>(null);
 
 
-  // Simple “send email” intent (keep it broad but not overfitted)
+  // Simple “send email” intent (align with server-side logic)
   function wantsEmailLocal(s: string): boolean {
-    const m = s.toLowerCase();
-    return /\b(send|draft|write)\s+(an\s+)?email\b|\bemail\s+(him|her|them|me|us|the\s+person|the\s+team)\b/.test(m);
+    const m = s.toLowerCase().trim();
+    if (/@/.test(m) && /\b(email\s+is|my\s+email|their\s+email)\b/.test(m)) return false;
+    return /\b(send|draft|write|compose)\b.*\bemail\b|\bemail\b.*\b(him|her|them|me|us|person|team)\b/i.test(m);
   }
 
   // Minimal email validator
@@ -214,13 +219,18 @@ export function ChatApplication() {
     const documentContext = undefined;
     const toolFlags = await fetchToolFlags();
   
+    const reqContext = (lastContextRef.current && typeof lastContextRef.current === 'object'
+      && Object.keys(lastContextRef.current).length > 0)
+      ? lastContextRef.current
+      : null;
+
     const requestBody = {
       message: userMessage.content,
       modelConfig: selectedModel,
       conversationHistory: conversationHistoryForAPI,
       documentContext,
       toolFlags,
-      context: lastContextRef.current, // pass prior JSON so WF2 can run
+      context: reqContext, // pass prior JSON so WF2 can run (omit if empty)
     };
   
     try {
@@ -262,8 +272,27 @@ export function ChatApplication() {
 
       <div className="flex-1 flex min-w-0">
         <div className={`w-full flex flex-col bg-background`}>
-          {/* Header spacer */}
-          <div className="flex items-center justify-end p-4 h-[69px]" />
+          {/* Header */}
+          <div className="flex items-center justify-between p-4 h-[69px] border-b border-border">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex items-center justify-center">
+                {resolvedTheme === "dark" ? (
+                  <Image src="/logoLight.svg" alt="Actual Insight Logo" width={24} height={24} />
+                ) : (
+                  <Image src="/logoDark.svg" alt="Actual Insight Logo" width={24} height={24} />
+                )}
+              </span>
+              <span className="text-foreground font-semibold">actual insight</span>
+            </div>
+            <button
+              onClick={handleNewChat}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+              aria-label="New chat"
+            >
+              <Plus className="w-5 h-5" />
+              <span className="hidden sm:inline">New Chat</span>
+            </button>
+          </div>
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-6">

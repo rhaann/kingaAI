@@ -149,7 +149,13 @@ export async function POST(req: NextRequest) {
           { status: 200 }
         );
       }
-      if (!incomingContext) {
+      // Reject when context is missing or empty object/array (prevent sending {})
+      const contextIsEmpty =
+        incomingContext == null ||
+        (typeof incomingContext === "object" && Object.keys(incomingContext as Record<string, unknown>).length === 0) ||
+        (Array.isArray(incomingContext) && incomingContext.length === 0);
+
+      if (contextIsEmpty) {
         return NextResponse.json(
           {
             result: {
