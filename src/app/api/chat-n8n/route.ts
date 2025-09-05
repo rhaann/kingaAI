@@ -12,21 +12,6 @@ function autoTitleFrom(text: string): string {
   return cleaned.length > 60 ? cleaned.slice(0, 57) + "…" : cleaned;
 }
 
-// very simple intent check
-// function wantsEmail(msg: string): boolean {
-//   const m = msg.toLowerCase();
-//   return /\b(send\s+email|email\s+(the\s+)?person|email\s+(them|him|her))\b/.test(m);
-// }
-
-function wantsEmail(msg: string): boolean {
-  const m = msg.toLowerCase().trim();
-
-  // If the user is just giving an address, that's not an action
-  if (/@/.test(m) && /\b(email\s+is|my\s+email|their\s+email)\b/.test(m)) return false;
-
-  // Action intent: allow words between the verb and "email"
-  return /\b(send|draft|write|compose)\b.*\bemail\b|\bemail\b.*\b(him|her|them|me|us|person|team)\b/i.test(m);
-}
 
 
 // turn any n8n response into a chat string
@@ -125,87 +110,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const WF1_URL = process.env.N8N_CHAT_WEBHOOK;   // research workflow (returns JSON profile)
-    const WF2_URL = process.env.N8N_EMAIL_WEBHOOK;  // email workflow (sends email)
+    const WF1_URL = process.env.N8N_CHAT_WEBHOOK;   // single workflow (returns JSON/profile)
     if (!WF1_URL) {
       return NextResponse.json(
         { result: { output: "n8n webhook is not configured.", suggestedTitle: "New chat" } },
         { status: 200 }
       );
     }
-    const isSearch = /\b(search|find|lookup|research)\b/i.test(message);
-    const sendEmail = !isSearch && wantsEmail(message);
-    console.log("[chat-n8n] msg:", message, { isSearch, sendEmail });
-    // const sendEmail = wantsEmail(message);
-
-    // If user asked to email, we need the context (profile) from the previous turn.
-    // Expect the client to pass it back as `context` (whatever WF1 returned).
-    const incomingContext = body.context ?? null;
-
-    if (sendEmail) {
-      if (!WF2_URL) {
-        return NextResponse.json(
-          { result: { output: "Email workflow is not configured.", suggestedTitle: autoTitleFrom(message) } },
-          { status: 200 }
-        );
-      }
-      // Reject when context is missing or empty object/array (prevent sending {})
-      const contextIsEmpty =
-        incomingContext == null ||
-        (typeof incomingContext === "object" && Object.keys(incomingContext as Record<string, unknown>).length === 0) ||
-        (Array.isArray(incomingContext) && incomingContext.length === 0);
-
-      if (contextIsEmpty) {
-        return NextResponse.json(
-          {
-            result: {
-              output:
-                "I need the contact details to email them. Ask me to research the person first (so I can capture their info), or pass the context with your request.",
-              suggestedTitle: autoTitleFrom(message),
-            },
-          },
-          { status: 200 }
-        );
-      }
-
-      // Call Workflow-2 with the profile/context
-      const res = await fetch(WF2_URL, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          conversationId: chatId,
-          userId: user.uid,
-          message,           // “send email …”
-          profile: incomingContext, // full JSON from WF1
-        }),
-      });
-
-      if (!res.ok) {
-        const t = await res.text().catch(() => "");
-        return NextResponse.json(
-          {
-            result: {
-              output: "The email workflow did not respond successfully.",
-              suggestedTitle: autoTitleFrom(message),
-              error: t || `${res.status} ${res.statusText}`,
-            },
-          },
-          { status: 200 }
-        );
-      }
-
-      const n8n = (await res.json().catch(() => ({}))) as unknown;
-      const reply = coerceReply(n8n);
-
-      return NextResponse.json({
-        result: {
-          output: reply,
-          suggestedTitle: autoTitleFrom(message),
-        },
-      });
-    }
-
-    // Otherwise: call Workflow-1 (research) and return its JSON + a readable summary
+    // Call the single workflow and return its JSON + a readable summary
     const res = await fetch(WF1_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
