@@ -28,32 +28,6 @@ function coerceReply(n8n: unknown): string {
     const o = n8n as Record<string, unknown>;
     if (typeof o.reply === "string") return o.reply;
     if (o.reply && typeof o.reply === "object") return JSON.stringify(o.reply, null, 2);
-
-    // Build a readable markdown summary for “person profile” style objects
-    const lower: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(o)) lower[k.toLowerCase()] = v;
-
-    const lines = [
-      lower.name ? `**${lower.name}**` : null,
-      lower.linkedin ? `LinkedIn: ${lower.linkedin}` : null,
-      lower.email ? `Email: ${lower.email}` : null,
-      lower.background ? `Background: ${lower.background}` : null,
-      (lower["current company"] ?? o["Current Company"])
-        ? `Current Company: ${lower["current company"] ?? o["Current Company"]}`
-        : null,
-      (lower["company description"] ?? o["Company Description"])
-        ? `Company Description: ${lower["company description"] ?? o["Company Description"]}`
-        : null,
-      (lower["company linkedin"] ?? o["Company LinkedIn"])
-        ? `Company LinkedIn: ${lower["company linkedin"] ?? o["Company LinkedIn"]}`
-        : null,
-      (lower["company website"] ?? o["Company Website"])
-        ? `Company Website: ${lower["company website"] ?? o["Company Website"]}`
-        : null,
-      lower.source ? `Sources: ${lower.source}` : null,
-    ].filter(Boolean);
-
-    if (lines.length) return lines.join("\n");
     return JSON.stringify(o, null, 2);
   }
 

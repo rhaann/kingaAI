@@ -15,7 +15,6 @@ import { callChatApi } from "@/lib/client/callChatApi";
 import { buildConversationHistory } from "@/lib/chat/buildConversationHistory";
 
 import { auth } from "@/services/firebase";
-  // import { collection, getDocs } from "firebase/firestore";
 
 export function ChatApplication() {
   const { resolvedTheme } = useTheme();
@@ -34,30 +33,7 @@ export function ChatApplication() {
     loadChat,
   } = useChats();
 
-  type EmailishContext = {
-    email?: string;
-    Email?: string;
-    contact?: { email?: string } | null;
-    person?: { email?: string } | null;
-    [key: string]: unknown;
-  };
-  const lastContextRef = useRef<EmailishContext | null>(null);
-
-
-  // Simple “send email” intent (align with server-side logic)
-  function wantsEmailLocal(s: string): boolean {
-    const m = s.toLowerCase().trim();
-    if (/@/.test(m) && /\b(email\s+is|my\s+email|their\s+email)\b/.test(m)) return false;
-    return /\b(send|draft|write|compose)\b.*\bemail\b|\bemail\b.*\b(him|her|them|me|us|person|team)\b/i.test(m);
-  }
-
-  // Minimal email validator
-  function isValidEmail(val: unknown): val is string {
-    if (typeof val !== "string") return false;
-    const s = val.trim();
-    // simple, safe, and good enough for preflight
-    return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(s);
-  }
+  
   const pendingIdsRef = useRef<Set<string>>(new Set());
   
 
@@ -69,9 +45,7 @@ export function ChatApplication() {
     const byId   = mc?.id   ? AVAILABLE_MODELS.find((m) => m.id === mc.id)   : null;
     const byName = mc?.name ? AVAILABLE_MODELS.find((m) => m.name === mc.name) : null;
     setSelectedModel(byId || byName || AVAILABLE_MODELS[0]);
-  
-    // only on chat change
-    
+      
   }, [currentChatId]);
   
   useEffect(() => {
@@ -112,12 +86,10 @@ export function ChatApplication() {
   }, [messages]);
 
   const handleNewChat = async () => {
-    lastContextRef.current = null;            // NEW
     await createNewChat(selectedModel);
   };
 
   const handleSelectChat = (chatId: string) => {
-    lastContextRef.current = null;            // NEW
     loadChat(chatId);
   };
 
@@ -130,11 +102,6 @@ export function ChatApplication() {
     const uid = auth.currentUser?.uid;
     try {
       if (!uid) return defaults;
-  
-      // 1) Try per-user collection: users/{uid}/toolPermissions/{toolId}
-      // const perUserCol = collection(db, "users", uid, "toolPermissions");
-      // const perUserSnap = await getDocs(perUserCol);
-      
   
     } catch (e) {
       console.warn("[client] fetchToolFlags failed:", e);
@@ -168,55 +135,7 @@ export function ChatApplication() {
     pendingIdsRef.current.add(userMessage.id);
     pendingIdsRef.current.add(thinkingMessageId);
   
-    // 2) Email preflight (only if the user intent is "send email")
-    const sendEmailIntent = wantsEmailLocal(messageContent);
-  
-    // try to get an email from last context first, then fall back to one typed in this message
-    const ctx = lastContextRef.current || null;
-    const emailFromContext =
-      ctx?.email ??
-      ctx?.Email ??
-      ctx?.contact?.email ??
-      ctx?.person?.email ??
-      null;
-  
-    const emailFromMessage =
-      messageContent.match(/\b[^\s@]+@[^\s@]+\.[^\s@]{2,}\b/i)?.[0] ?? null;
-  
-    const candidateEmail = emailFromContext || emailFromMessage;
-  
-    if (sendEmailIntent) {
-      if (!candidateEmail) {
-        // replace typing bubble with a guardrail
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === thinkingMessageId
-              ? {
-                  ...m,
-                  content:
-                    "I don’t have a contact email yet. Ask me to research them first, or include an address (e.g., `email alex@example.com`).",
-                }
-              : m
-          )
-        );
-        pendingIdsRef.current.delete(thinkingMessageId);
-        return;
-      }
-      if (!isValidEmail(candidateEmail)) {
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === thinkingMessageId
-              ? {
-                  ...m,
-                  content: `The email I have (\`${candidateEmail}\`) doesn’t look valid. Please provide a correct address or run a quick search first.`,
-                }
-              : m
-          )
-        );
-        pendingIdsRef.current.delete(thinkingMessageId);
-        return;
-      }
-    }
+    
   
     // 3) Prepare request payload for the API
     const updatedMessages = [...messages, userMessage]; // history for server (exclude typing bubble)
@@ -226,28 +145,17 @@ export function ChatApplication() {
     const documentContext = undefined;
     const toolFlags = await fetchToolFlags();
   
-    const reqContext = (lastContextRef.current && typeof lastContextRef.current === 'object'
-      && Object.keys(lastContextRef.current).length > 0)
-      ? lastContextRef.current
-      : null;
-
     const requestBody = {
       message: userMessage.content,
       modelConfig: selectedModel,
       conversationHistory: conversationHistoryForAPI,
       documentContext,
       toolFlags,
-      context: reqContext, // pass prior JSON so WF2 can run (omit if empty)
     };
   
     try {
       // 4) Call API (Workflow-1 or Workflow-2 decided in the route)
       const { result } = await callChatApi({ ...requestBody, chatId }, "/api/chat-n8n");
-  
-      // Store fresh context from WF1 so a follow-up "send email" can use it
-      if (result?.context) {
-        lastContextRef.current = result.context;
-      }
   
       const aiContent = result?.output ?? "No response";
   
@@ -324,23 +232,8 @@ export function ChatApplication() {
                           }
                         })();
 
-                  // Try to parse JSON for structured display
-                  // let parsed: unknown = null;
                   
-
-                  // try {
-                  //   if (/^\s*[{[]/.test(contentStr)) {
-                  //     parsed = JSON.parse(contentStr);
-                  //     // parsed is intentionally not used for rendering cards anymore
-                  //   }
-                  // } catch {
-                  //   // not JSON — ignore and let markdown handle it
-                  // }
-                  // const isKingaCardFromParsed = isRecord && Array.isArray((parsed as { sections?: unknown[] } | null)?.sections);
                   const willRenderCardFallback = false;
-
-
-
                   const bubbleClass = willRenderCardFallback
                     ? "max-w-full sm:max-w-[90%] md:max-w-[75%] lg:max-w-[65%] p-0"
                     : `max-w-full sm:max-w-[90%] md-max-w-[75%] lg:max-w-[65%]
@@ -385,8 +278,6 @@ export function ChatApplication() {
           {/* Chat input */}
           <ChatInputBox onSend={handleSend} />
         </div>
-
-        
       </div>
     </div>
   );
