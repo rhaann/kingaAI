@@ -86,6 +86,11 @@ export type DriveFile = {
  */
 type ToolArgs = Record<string, unknown>;
 
+export type ToolCall = {
+  toolName: string;
+  toolArgs: ToolArgs;
+};
+
 export type LLMResult = 
   | { type: 'text'; content: string | null }
   | { 
@@ -104,7 +109,11 @@ export type LLMResult =
     toolName: string; 
     toolArgs: ToolArgs 
 
-  }; // For dynamic n8n tools
+  }
+  | { type: 'multi_tool_calls'; calls: ToolCall[] }; // For dynamic n8n tools and future multi-call
+
+// Future-ready: when multiple tool calls are returned by the model in one turn
+export type LLMResultMultiTools = { type: 'multi_tool_calls'; calls: ToolCall[] };
 
 
 

@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { ModelConfig, LLMResult } from "@/types/types";
+import type { ModelConfig, LLMResult, ToolCall } from "@/types/types";
 import { SYSTEM_PROMPT } from "@/lib/prompt/systemPrompt";
 import { toolCatalogForLLM,AITool  } from "@/config/toolsConfig";
 
@@ -59,6 +59,7 @@ const CREATE_RE =
 const UPDATE_RE =
   /\b(update|revise|edit|change|modify|append|add|tweak|replace|fix|adjust|remove)\b/i;
 const LOOKS_LIKE_DOC_TEXT_RE = /^(subject\s*:|content\s*:)/i;
+const RESEARCH_RE = /\b(find|search|look\s?up|locate|discover|identify|web|google|linkedin)\b/i;
 
 function isCreateIntent(msg: string, hasOpenDoc: boolean) {
   if (hasOpenDoc) return false;
@@ -138,17 +139,23 @@ async function sendToOpenAI(
     messages,
     temperature: 0,
     tools,
-    parallel_tool_calls: false,
+    parallel_tool_calls: true,
     tool_choice: "auto",
   };
 
   // Nudge when obvious
   if (!disableNudges) {
     const available = new Set(allowedTools.map(t => t.name));
+    const hasExternalTools = allowedTools.some(t => t.name === "search" || t.name === "email_finder" || t.name === "crm");
     if (wantsUpdate && available.has("update_document")) {
       req.tool_choice = { type: "function", function: { name: "update_document" } };
     } else if (wantsCreate && available.has("create_document")) {
-      req.tool_choice = { type: "function", function: { name: "create_document" } };
+      // Avoid premature drafting when the user also asked to research/find something
+      // and when external tools are available. Let the model plan tools first.
+      const seemsLikeResearch = RESEARCH_RE.test(message);
+      if (!(hasExternalTools && seemsLikeResearch)) {
+        req.tool_choice = { type: "function", function: { name: "create_document" } };
+      }
     }
   }
 
@@ -158,10 +165,18 @@ async function sendToOpenAI(
   // Tool call path
   const toolCalls = responseMessage?.tool_calls;
   if (toolCalls && toolCalls.length > 0) {
-    const toolCall = toolCalls[0];
-    const args = safeParseArgs(toolCall.function.arguments);
-    return { type: "tool_call", toolName: toolCall.function.name, toolArgs: args };
-    // ^ route.ts will now dispatch this tool call (internal or MCP).
+    // If multiple tool calls are returned, surface all of them for future handling.
+    if (toolCalls.length > 1) {
+      const calls: ToolCall[] = toolCalls.map(tc => ({
+        toolName: tc.function.name,
+        toolArgs: safeParseArgs(tc.function.arguments),
+      }));
+      return { type: "multi_tool_calls", calls };
+    }
+    // Single tool call (existing behavior)
+    const tc = toolCalls[0];
+    const args = safeParseArgs(tc.function.arguments);
+    return { type: "tool_call", toolName: tc.function.name, toolArgs: args };
   }
 
   // Safety net for doc updates

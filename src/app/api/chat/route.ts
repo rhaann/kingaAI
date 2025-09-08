@@ -7,6 +7,8 @@ import { MCP_SERVER, llmToolsForPermissions } from "@/config/toolsConfig";
 import { runEmailFinder } from "@/lib/tools/runners/emailFinder";
 import { getUserFromRequest } from "@/services/authRequest";
 import { adminDb } from "@/services/firebaseAdmin";
+import { buildSynthesisPrompt } from "@/lib/prompt/synthesisPrompt";
+import { buildTitlePrompt } from "@/lib/prompt/titlePrompt";
 
 
 
@@ -150,19 +152,24 @@ function buildSanitizedUrlsMap(envelope: unknown): Record<string, string> {
     if (typeof u === "string" && u.trim()) out[u] = cleanUrl(u);
   };
 
-  if (envelope && typeof envelope === "object") {
-    const e = envelope as Minimal;
-
-    add(e.data?.website);
-    add(e.data?.linkedin_url);
-
-    if (Array.isArray(e.data?.findings)) {
-      for (const f of e.data.findings) add(f?.source);
+  const collectFrom = (env: unknown) => {
+    if (env && typeof env === "object") {
+      const e = env as Minimal;
+      add(e.data?.website);
+      add(e.data?.linkedin_url);
+      if (Array.isArray(e.data?.findings)) {
+        for (const f of e.data.findings) add(f?.source);
+      }
+      if (Array.isArray(e.meta?.source)) {
+        for (const s of e.meta.source as unknown[]) add(s);
+      }
     }
+  };
 
-    if (Array.isArray(e.meta?.source)) {
-      for (const s of e.meta.source as unknown[]) add(s);
-    }
+  if (Array.isArray(envelope)) {
+    for (const env of envelope) collectFrom(env);
+  } else {
+    collectFrom(envelope);
   }
 
   return out;
@@ -182,36 +189,16 @@ async function synthesizeWithLLM({
 }): Promise<string> {
   const sanitizedUrls = buildSanitizedUrlsMap(envelope);
 
-  const system = [
-    "You are a results interpreter. Turn tool envelopes into a unified, conversational answer.",
-    "Rules:",
-    "- Base your answer ONLY on the envelope.",
-    "- Do not mention which tool produced the data; no section headers or tool names.",
-    "- Start with a 2–3 sentence summary that answers the user directly.",
-    "- If the envelope includes a list (findings/results/items/records), weave in up to THREE concise items.",
-    "- Dates should appear inline when present (e.g., “(2024-05-01–present)”).",
-    "- Emails may be shown in full. Do NOT include internal IDs (companyId, contactId, runId, etc.).",
-    "- URLs: when you include a link, render it as Markdown `[clean-domain.com/path](RAW_URL)`. Use <sanitized_urls> to map raw → clean. One link per bullet/line; no link lists.",    "- If the envelope indicates limitations/notes or partial access, append ONE italicized line at the end starting with “Note:” (no links there).",
-    "- If status is failure or required fields are missing, give a brief, neutral explanation and a simple next step.",
-    "- If you’re uncertain, say what’s missing and ask ONE clarifying question at the end.",
-    "- Never repeat the raw URL after the Markdown link; do not append (URL) after [text](URL).",
-    "- No space between the closing ']' and opening '(' in a link.",
-    "- For links, output the bare clean URL text only: domain.com/path (no protocol, no []() Markdown).",
-    "- Do not append the raw URL in parentheses after a link.",
-    "- Keep ~150–250 words. Be clear and professional."
-  ].join("\n");
-
-  
-
-  const synthesisPrompt =
-    `${system}\n\n<sanitized_urls>\n${JSON.stringify(sanitizedUrls, null, 2)}\n</sanitized_urls>\n` +
-    `<envelope>\n${JSON.stringify(envelope)}\n</envelope>`;
+  const synthesisPrompt = buildSynthesisPrompt(envelope, sanitizedUrls);
 
   const llm = await sendMessage(synthesisPrompt, {
     modelConfig,
     conversationHistory,
-    documentContext,
-    tools: [], // disable tools on the synthesis pass
+    // Important: disable document context and nudges so the synthesis step
+    // never triggers the doc-update safety net or tool calls.
+    documentContext: undefined,
+    tools: [],
+    disableNudges: true,
   });
 
   return llm.type === "text" ? (llm.content ?? "") : "Here’s what I found.";
@@ -228,11 +215,7 @@ async function generateChatTitleWithLLM({
   modelConfig: ModelConfig;
   envelope?: ToolEnvelope;
 }): Promise<string | null> {
-  const toolSummary = envelope?.summary ? `\n\nTool summary:\n${envelope.summary}` : "";
-  const prompt =
-    "Generate a concise, descriptive chat title (max 6 words). " +
-    "Output ONLY the title with no quotes or punctuation.\n\n" +
-    `User request:\n${message}${toolSummary}`;
+  const prompt = buildTitlePrompt(message, envelope?.summary ? String(envelope.summary) : undefined);
 
   const llm = await sendMessage(prompt, {
     modelConfig,
@@ -518,6 +501,219 @@ export async function POST(req: NextRequest) {
         },
       });
     }
+
+    // --- NEW: Multiple tool calls in a single turn -------------------------
+    if (llm.type === "multi_tool_calls") {
+      const calls = Array.isArray(llm.calls) ? llm.calls.slice(0, 3) : [];
+      if (calls.length === 0) {
+        return NextResponse.json({ result: { output: "I couldn’t determine which tools to use." } });
+      }
+
+      // Execute external MCP tools in parallel; handle internal doc tools inline first
+      const envelopes: unknown[] = [];
+      const ledger: Array<{ tool: string; args: Record<string, unknown>; ok: boolean; durationMs?: number; note?: string }> = [];
+      let card: KingaCard | undefined;
+
+      // 1) Handle at most one internal doc tool (create/update) first
+      const docCall = calls.find(c => c.toolName === "create_document" || c.toolName === "update_document");
+      if (docCall) {
+        if (docCall.toolName === "create_document") {
+          const artifact = buildNewArtifact(docCall.toolArgs as any);
+          const result: ApiResult = {
+            output: `I've created a document for you: "${artifact.title}"`,
+            artifact,
+            suggestedTitle: llmTitle || artifact.title || autoTitleFrom(message || ""),
+          };
+          return NextResponse.json({ result });
+        }
+        if (docCall.toolName === "update_document") {
+          if (!currentArtifactId) {
+            return NextResponse.json({
+              result: {
+                output:
+                  "I need to know which document is open to update it. Please open a document and try again.",
+                suggestedTitle: llmTitle || autoTitleFrom(message || currentArtifactTitle || ""),
+              },
+            });
+          }
+          const artifact = buildUpdateArtifact(currentArtifactId, docCall.toolArgs as any);
+          const result: ApiResult = {
+            output: "I've updated the document for you.",
+            artifact,
+            suggestedTitle: llmTitle || currentArtifactTitle || autoTitleFrom(message || ""),
+          };
+          return NextResponse.json({ result });
+        }
+      }
+
+      // 2) Filter and run allowed MCP tools in parallel (cap at 3)
+      const external = calls.filter(c => c.toolName !== "create_document" && c.toolName !== "update_document");
+      const limited = external.slice(0, 3);
+
+      const runners = limited.map(async (c) => {
+        if (c.toolName === "search") {
+          if (!toolFlags.search) return { ok: false, envelope: { summary: "Search not permitted" } } as unknown as { ok: boolean; envelope: unknown };
+          const agent_query = String((c.toolArgs as Record<string, unknown> | undefined)?.agent_query || "").trim();
+          if (!agent_query) return { ok: false, envelope: { summary: "Missing agent_query" } } as unknown as { ok: boolean; envelope: unknown };
+          return runWebSearch(
+            { agent_query },
+            { baseUrl: MCP_SERVER.endpoint, headers: { [MCP_SERVER.authHeaderName]: MCP_SERVER.authHeaderValue }, timeoutMs: 30_000 }
+          );
+        }
+        if (c.toolName === "email_finder") {
+          if (!toolFlags.email_finder) return { ok: false, envelope: { summary: "Email finder not permitted" } } as unknown as { ok: boolean; envelope: unknown };
+          const linkedin_url = String((c.toolArgs as Record<string, unknown> | undefined)?.linkedin_url || "").trim();
+          if (!linkedin_url) return { ok: false, envelope: { summary: "Missing linkedin_url" } } as unknown as { ok: boolean; envelope: unknown };
+          return runEmailFinder(
+            { linkedin_url },
+            { baseUrl: MCP_SERVER.endpoint, headers: { [MCP_SERVER.authHeaderName]: MCP_SERVER.authHeaderValue }, timeoutMs: 30_000 }
+          );
+        }
+        if (c.toolName === "crm") {
+          if (!toolFlags.crm) return { ok: false, envelope: { summary: "CRM not permitted" } } as unknown as { ok: boolean; envelope: unknown };
+          const rawPkg = (c.toolArgs as Record<string, unknown> | undefined)?.crm_handoff_package;
+          const pkg = typeof rawPkg === "string" ? rawPkg : JSON.stringify(rawPkg ?? {});
+          if (!pkg) return { ok: false, envelope: { summary: "Missing crm_handoff_package" } } as unknown as { ok: boolean; envelope: unknown };
+          return runCrm(
+            { crm_handoff_package: pkg },
+            { baseUrl: MCP_SERVER.endpoint, headers: { [MCP_SERVER.authHeaderName]: MCP_SERVER.authHeaderValue }, timeoutMs: 30_000 }
+          );
+        }
+        return { ok: false, envelope: { summary: `Unsupported tool: ${c.toolName}` } } as unknown as { ok: boolean; envelope: unknown };
+      });
+
+      const results = await Promise.allSettled(runners);
+      results.forEach((r, idx) => {
+        const c = limited[idx];
+        if (r.status === "fulfilled") {
+          const val = r.value as { ok?: boolean; envelope?: unknown; card?: KingaCard | undefined; durationMs?: number };
+          const ok = !!val?.ok;
+          if (val?.envelope) envelopes.push(val.envelope);
+          if (!card && val?.card) card = val.card as KingaCard;
+          ledger.push({ tool: c.toolName, args: (c.toolArgs as Record<string, unknown>) || {}, ok, durationMs: val?.durationMs });
+        } else {
+          envelopes.push({ summary: "Tool failed" });
+          ledger.push({ tool: c.toolName, args: (c.toolArgs as Record<string, unknown>) || {}, ok: false, note: "promise rejected" });
+        }
+      });
+
+      // Conditional continuation: if we have LinkedIn profile URLs and permission, try email_finder
+      const allUrls = Object.keys(buildSanitizedUrlsMap(envelopes));
+      const linkedinProfiles = allUrls.filter((u) => /https?:\/\/([a-z]+\.)?linkedin\.com\/in\//i.test(u));
+
+      if (linkedinProfiles.length === 1) {
+        if (toolFlags.email_finder) {
+          const linkedin_url = linkedinProfiles[0];
+          const ef = await runEmailFinder(
+            { linkedin_url },
+            { baseUrl: MCP_SERVER.endpoint, headers: { [MCP_SERVER.authHeaderName]: MCP_SERVER.authHeaderValue }, timeoutMs: 30_000 }
+          );
+          if (ef?.ok) {
+            envelopes.push(ef.envelope);
+          } else {
+            envelopes.push({ summary: "Email finder failed on the selected profile." });
+          }
+        } else {
+          envelopes.push({ summary: "Email finder not permitted for this user." });
+        }
+      } else if (linkedinProfiles.length > 1) {
+        const pickList = linkedinProfiles.map((u) => `- ${cleanUrl(u)} (${u})`).join("\n");
+        const pickMsg = [
+          "I found multiple LinkedIn profiles that might match. Please confirm which one to use:",
+          pickList,
+        ].join("\n");
+        const result: ApiResult = {
+          output: pickMsg,
+          suggestedTitle: llmTitle || autoTitleFrom(message || currentArtifactTitle || ""),
+          rawEnvelopes: envelopes,
+        };
+        return NextResponse.json({ result });
+      }
+
+      // Conditional CRM continuation: if we have a single likely company website/domain
+      const hosts = new Set<string>();
+      for (const raw of allUrls) {
+        try {
+          const h = new URL(raw).hostname.toLowerCase();
+          if (!h.includes("linkedin.com")) hosts.add(h);
+        } catch {
+          // ignore
+        }
+      }
+      if (hosts.size === 1) {
+        const [onlyHost] = Array.from(hosts);
+        if (toolFlags.crm) {
+          const pkg = JSON.stringify({ action: "lookup_or_upsert_company", website: onlyHost });
+          const crmRes = await runCrm(
+            { crm_handoff_package: pkg },
+            { baseUrl: MCP_SERVER.endpoint, headers: { [MCP_SERVER.authHeaderName]: MCP_SERVER.authHeaderValue }, timeoutMs: 30_000 }
+          );
+          if (crmRes?.ok) {
+            envelopes.push(crmRes.envelope);
+          } else {
+            envelopes.push({ summary: `CRM failed for ${onlyHost}.` });
+          }
+        } else {
+          envelopes.push({ summary: "CRM not permitted for this user." });
+        }
+      } else if (hosts.size > 1) {
+        const list = Array.from(hosts).map((h) => `- ${h}`).join("\n");
+        const pickMsg = [
+          "I found multiple company domains. Which one should I use for CRM?",
+          list,
+        ].join("\n");
+        const result: ApiResult = {
+          output: pickMsg,
+          suggestedTitle: llmTitle || autoTitleFrom(message || currentArtifactTitle || ""),
+          rawEnvelopes: envelopes,
+        };
+        return NextResponse.json({ result });
+      }
+
+      const output = await synthesizeWithLLM({
+        envelope: envelopes,
+        modelConfig: modelConfig!,
+        conversationHistory,
+        documentContext,
+      });
+
+      // If the synthesis looks like an email draft, store as a document artifact instead of full chat text
+      const looksLikeEmail = /(^\s*subject\s*:\s*)|(^\s*hi\b)|(^\s*hello\b)/i.test(output || "");
+      if (looksLikeEmail) {
+        const artifact = buildNewArtifact({ title: "Outreach email", content: output });
+        const result: ApiResult = {
+          output: `I drafted an email for you: "${artifact.title}"`,
+          artifact,
+          suggestedTitle: llmTitle || artifact.title || autoTitleFrom(message || ""),
+          rawEnvelopes: envelopes,
+        };
+        return NextResponse.json({ result });
+      }
+
+      const result: ApiResult = {
+        output,
+        card,
+        suggestedTitle: llmTitle || autoTitleFrom(message || currentArtifactTitle || ""),
+        rawEnvelopes: envelopes,
+      };
+      // Note: ledger is intentionally not included in the public response yet; add if desired.
+      return NextResponse.json({ result });
+    }
+
+    // --- Agent loop (one continuation step) --------------------------------
+    // If the first response was text, we can still give the model one more chance
+    // to call tools based on synthesized or prior results if desired. Here we keep it
+    // simple: only continue when the first response requested tools (handled above).
+    // For a true loop, we'd refactor the above into a function and reuse it here.
+
+    // If you want a continuation when the first result is text, uncomment below to allow a follow-up:
+    // const cont = await sendMessage(buildContinuationPrompt(message, []), {
+    //   modelConfig: modelConfig!,
+    //   conversationHistory,
+    //   documentContext,
+    //   tools: llmToolsForPermissions(permsForLLM),
+    // });
+    // ... handle cont similar to the branches above.
 
     // Shouldn’t reach here
     return NextResponse.json({
