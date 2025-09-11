@@ -513,7 +513,7 @@ export async function POST(req: NextRequest) {
       const docCall = calls.find(c => c.toolName === "create_document" || c.toolName === "update_document");
       if (docCall) {
         if (docCall.toolName === "create_document") {
-          const artifact = buildNewArtifact(docCall.toolArgs as any);
+          const artifact = buildNewArtifact(docCall.toolArgs as { title?: unknown; subject?: unknown; content?: unknown });
           const result: ApiResult = {
             output: `I've created a document for you: "${artifact.title}"`,
             artifact,
@@ -531,7 +531,7 @@ export async function POST(req: NextRequest) {
               },
             });
           }
-          const artifact = buildUpdateArtifact(currentArtifactId, docCall.toolArgs as any);
+          const artifact = buildUpdateArtifact(currentArtifactId, docCall.toolArgs as { content?: unknown });
           const result: ApiResult = {
             output: "I've updated the document for you.",
             artifact,
