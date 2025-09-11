@@ -3,6 +3,7 @@
 import SideMenu from "@/components/sideMenu";
 import { FileText, Edit3, X, Check, ChevronRight } from "lucide-react";
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { useChats } from "@/hooks/useChats";
 import { Message, Artifact, ModelConfig, KingaCard, ToolEnvelope } from "@/types/types";
 import { AVAILABLE_MODELS } from "../config/modelConfig";
@@ -27,6 +28,7 @@ type ChatLike = {
 
 
 export function ChatApplication() {
+  const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentArtifact, setCurrentArtifact] = useState<Artifact | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -485,8 +487,18 @@ export function ChatApplication() {
 
       <div className="flex-1 flex min-w-0">
         <div className={`${currentArtifact ? "w-1/2" : "w-full"} flex flex-col bg-background`}>
-          {/* Header spacer */}
-          <div className="flex items-center justify-end p-4 h-[69px]" />
+          {/* Header */}
+          <div className="flex items-center justify-end p-4 h-[69px] relative z-10">
+            <button
+              type="button"
+              onClick={() => { window.location.assign("/hermes"); }}
+
+              className="px-5 py-2.5 text-base bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg"
+              aria-label="Open Hermes"
+            >
+              Hermes
+            </button>
+          </div>
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-6">
