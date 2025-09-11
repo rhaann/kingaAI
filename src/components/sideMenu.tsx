@@ -93,20 +93,22 @@ export default function SideMenu({
             }`}
           >
             <div className="w-8 h-8 flex-shrink-0">
-              <Image
-                src="/logoDark.svg"
-                alt="Actual Insight Logo"
-                width={32}
-                height={32}
-                className="block dark:hidden"
-              />
+              {theme === "dark" ? 
+             
+              
               <Image
                 src="/logoLight.svg"
                 alt="Actual Insight Logo"
                 width={32}
                 height={32}
-                className="hidden dark:block"
-              />
+              />:
+              <Image
+              src="/logoDark.svg"
+              alt="Actual Insight Logo"
+              width={32}
+              height={32}
+            />
+              }
             </div>
             <span className="text-foreground font-semibold text-lg whitespace-nowrap">
               actual insight

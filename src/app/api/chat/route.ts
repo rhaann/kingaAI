@@ -180,12 +180,10 @@ async function synthesizeWithLLM({
   envelope,
   modelConfig,
   conversationHistory = [],
-  documentContext,
 }: {
   envelope: unknown;
   modelConfig: ModelConfig;
   conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
-  documentContext?: string;
 }): Promise<string> {
   const sanitizedUrls = buildSanitizedUrlsMap(envelope);
 
@@ -344,7 +342,7 @@ export async function POST(req: NextRequest) {
           {
             baseUrl: MCP_SERVER.endpoint,
             headers: { [MCP_SERVER.authHeaderName]: MCP_SERVER.authHeaderValue },
-            timeoutMs: 30_000,
+            timeoutMs: 60_000,
           }
         );
 
@@ -365,7 +363,6 @@ export async function POST(req: NextRequest) {
           envelope,
           modelConfig: modelConfig!,
           conversationHistory,
-          documentContext,
         });
 
         const result: ApiResult = {
@@ -431,7 +428,6 @@ export async function POST(req: NextRequest) {
           envelope,
           modelConfig: modelConfig!,
           conversationHistory,
-          documentContext,
         });
 
         const prettyEntity = String(envelope?.data?.entity || "CRM").replace(/_/g, " ");
@@ -480,7 +476,6 @@ export async function POST(req: NextRequest) {
           envelope,
           modelConfig: modelConfig!,
           conversationHistory,
-          documentContext,
         });
 
         const result: ApiResult = {
@@ -674,7 +669,6 @@ export async function POST(req: NextRequest) {
         envelope: envelopes,
         modelConfig: modelConfig!,
         conversationHistory,
-        documentContext,
       });
 
       // If the synthesis looks like an email draft, store as a document artifact instead of full chat text
