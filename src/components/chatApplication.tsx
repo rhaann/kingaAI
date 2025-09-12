@@ -28,7 +28,6 @@ type ChatLike = {
 
 
 export function ChatApplication() {
-  const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentArtifact, setCurrentArtifact] = useState<Artifact | null>(null);
   const [isEditing, setIsEditing] = useState(false);
