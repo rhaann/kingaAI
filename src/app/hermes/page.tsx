@@ -15,12 +15,12 @@ const MAX_COMPANIES = 10;
 
 export default function HermesPage() {
   const router = useRouter();
-  const [step, setStep] = useState<0 | 1 | 2 | 3 | 4 | 5>(0);
+  const [step, setStep] = useState<-1 | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7>(-1);
   const [inputText, setInputText] = useState("");
   const [companies, setCompanies] = useState<ParsedCompany[]>([]);
 
   const canProceedFromInput = useMemo(() => inputText.trim().length > 0, [inputText]);
-  const progressPct = step === 0 ? 20 : step === 1 ? 40 : step === 2 ? 60 : step === 3 ? 80 : 100;
+  const progressPct = step === -1 ? 0 : step === 0 ? 20 : step === 1 ? 40 : step === 2 ? 60 : step === 3 ? 80 : 100;
   const [currentCompanyIndex, setCurrentCompanyIndex] = useState(0);
   const [onHold, setOnHold] = useState<ParsedCompany[]>([]);
   const [deleted, setDeleted] = useState<ParsedCompany[]>([]);
@@ -29,6 +29,16 @@ export default function HermesPage() {
   const [currentContactIndex, setCurrentContactIndex] = useState(0);
   const [emailDraftsByCompany, setEmailDraftsByCompany] = useState<Record<number, Record<string, { subject: string; body: string }>>>({});
   const [improveNotes, setImproveNotes] = useState("");
+  const [pendingAction, setPendingAction] = useState<null | "hold" | "delete">(null);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showNoteModal, setShowNoteModal] = useState(false);
+  const [actionNote, setActionNote] = useState("");
+  const [holdNotesByCompany, setHoldNotesByCompany] = useState<Record<number, string>>({});
+  const [deleteNotesByCompany, setDeleteNotesByCompany] = useState<Record<number, string>>({});
+  const [lastAction, setLastAction] = useState<
+    null | { type: "hold" | "delete"; companyName: string; note: string; fromIndex: number; toIndex: number | null }
+  >(null);
+  const [isLandingAnimating, setIsLandingAnimating] = useState(false);
 
   // Ensure contacts exist for a company if we have seed data from parsing
   function seedContactsForCompanyIfMissing(index: number): Contact[] {
@@ -53,20 +63,71 @@ export default function HermesPage() {
     return (contactsByCompany[index] || []).filter((c) => c.selected);
   }
 
-  // After finishing contacts for a company, move to the next company with contacts/email; otherwise mark done
+  // After finishing contacts for a company, move to the next company; otherwise mark done
   function advanceToNextCompanyOrFinish() {
-    for (let next = currentCompanyIndex + 1; next < companies.length; next++) {
-      const seeded = seedContactsForCompanyIfMissing(next);
-      const selectedNext = seeded.filter((c) => c.selected);
-      if (selectedNext.length > 0 || seeded.length > 0) {
-        setCurrentCompanyIndex(next);
-        setCurrentContactIndex(0);
-        setStep(3); // Repeat contact selection flow for the next company
-        return;
-      }
+    const next = currentCompanyIndex + 1;
+    if (next < companies.length) {
+      setCurrentCompanyIndex(next);
+      seedContactsForCompanyIfMissing(next);
+      setCurrentContactIndex(0);
+      setStep(3);
+      return;
     }
-    // No more companies with contacts/emails — show Done
     setStep(5);
+  }
+
+  function advanceToNextContactOrCompany() {
+    const selected = getSelectedContacts(currentCompanyIndex);
+    const nextIndex = currentContactIndex + 1;
+    if (nextIndex < selected.length) {
+      setCurrentContactIndex(nextIndex);
+    } else {
+      advanceToNextCompanyOrFinish();
+    }
+  }
+
+  function openActionModal(action: "hold" | "delete") {
+    setPendingAction(action);
+    setShowConfirmModal(true);
+  }
+
+  function cancelActionModal() {
+    setPendingAction(null);
+    setShowConfirmModal(false);
+    setShowNoteModal(false);
+    setActionNote("");
+  }
+
+  function confirmActionProceed() {
+    setShowConfirmModal(false);
+    setShowNoteModal(true);
+  }
+
+  function submitActionNote() {
+    const note = actionNote.trim();
+    if (!pendingAction || !note) return;
+    const fromIndex = currentCompanyIndex;
+    const toIndex = fromIndex + 1 < companies.length ? fromIndex + 1 : null;
+    const company = companies[fromIndex];
+    const name = company?.name || "Company";
+
+    if (pendingAction === "hold") {
+      setOnHold((prev) => [...prev, company]);
+      setHoldNotesByCompany((prev) => ({ ...prev, [fromIndex]: note }));
+      setLastAction({ type: "hold", companyName: name, note, fromIndex, toIndex });
+      setCurrentCompanyIndex(toIndex ?? fromIndex);
+      setStep(6);
+    } else if (pendingAction === "delete") {
+      setDeleted((prev) => [...prev, company]);
+      setDeleteNotesByCompany((prev) => ({ ...prev, [fromIndex]: note }));
+      setLastAction({ type: "delete", companyName: name, note, fromIndex, toIndex });
+      setCurrentCompanyIndex(toIndex ?? fromIndex);
+      setStep(7);
+    }
+
+    setShowNoteModal(false);
+    setPendingAction(null);
+    setActionNote("");
   }
 
   function toTitleCase(value: string): string {
@@ -183,14 +244,47 @@ export default function HermesPage() {
           </button>
         </div>
 
-        <div className="w-full h-1 bg-muted rounded-full overflow-hidden mb-10">
-          <div
-            className="h-full transition-all"
-            style={{ width: `${progressPct}%`, backgroundColor: "var(--color-sharp-orange)" }}
-          />
-        </div>
+        {step !== -1 ? (
+          <div className="w-full h-1 bg-muted rounded-full overflow-hidden mb-10">
+            <div
+              className="h-full transition-all"
+              style={{ width: `${progressPct}%`, backgroundColor: "var(--color-sharp-orange)" }}
+            />
+          </div>
+        ) : null}
 
-        {step === 0 ? (
+        {step === -1 ? (
+          <div
+            className="mx-auto max-w-2xl flex flex-col items-center justify-center text-center"
+            style={{ minHeight: "60vh", transform: isLandingAnimating ? "translateY(-120%)" : "translateY(0)", transition: "transform 320ms ease-in-out" }}
+          >
+           
+            <div className="flex flex-col gap-4 w-full max-w-md mx-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLandingAnimating(true);
+                  setTimeout(() => {
+                    setStep(0);
+                    setIsLandingAnimating(false);
+                  }, 320);
+                }}
+                className="px-8 py-4 md:py-5 rounded-2xl text-xl text-primary-foreground hover:opacity-90 w-full"
+                style={{ backgroundColor: "var(--color-turquoise)" }}
+              >
+                Get Started
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push("/activity")}
+                className="px-8 py-4 md:py-5 rounded-2xl text-xl border hover:bg-secondary w-full"
+                style={{ borderColor: "#0077D1", color: "#0077D1" }}
+              >
+                View Queue
+              </button>
+            </div>
+          </div>
+        ) : step === 0 ? (
           <div className="mx-auto max-w-3xl">
             <div className="text-center mb-6">
               <h2 className="text-xl md:text-2xl font-medium tracking-tight mb-1">Enter companies</h2>
@@ -208,7 +302,15 @@ export default function HermesPage() {
                 <span>We’ll parse names, sites, and emails.</span>
                 <span className="px-2 py-0.5 rounded-md bg-secondary/80">{Math.min(parseCompaniesFromInput(inputText).length, MAX_COMPANIES)} detected</span>
               </div>
-              <div className="flex justify-end gap-2 mt-2">
+              <div className="flex items-center justify-between gap-2 mt-2">
+                <button
+                  onClick={() => setStep(-1)}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border hover:bg-secondary"
+                  style={{ borderColor: "#0077D1", color: "#0077D1" }}
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  <span>Back</span>
+                </button>
                 <button
                   disabled={!canProceedFromInput}
                   onClick={handleParse}
@@ -357,26 +459,18 @@ export default function HermesPage() {
                   </button>
                   <div className="flex items-center gap-3">
                     <button
-                    onClick={() => {
-                      const c = companies[currentCompanyIndex];
-                      setOnHold((prev) => [...prev, c]);
-                      setCurrentCompanyIndex((i) => Math.min(i + 1, Math.max(0, companies.length - 1)));
-                    }}
-                    className="px-5 py-2.5 rounded-xl border bg-secondary text-foreground hover:bg-secondary/80"
-                  >
-                    Hold
-                  </button>
-                  <button
-                    onClick={() => {
-                      const c = companies[currentCompanyIndex];
-                      setDeleted((prev) => [...prev, c]);
-                      setCurrentCompanyIndex((i) => Math.min(i + 1, Math.max(0, companies.length - 1)));
-                    }}
-                    className="px-5 py-2.5 rounded-xl text-white hover:opacity-90"
-                    style={{ backgroundColor: "var(--color-sharp-orange)" }}
-                  >
-                    Delete
-                  </button>
+                      onClick={() => openActionModal("hold")}
+                      className="px-5 py-2.5 rounded-xl border bg-secondary text-foreground hover:bg-secondary/80"
+                    >
+                      Hold
+                    </button>
+                    <button
+                      onClick={() => openActionModal("delete")}
+                      className="px-5 py-2.5 rounded-xl text-white hover:opacity-90"
+                      style={{ backgroundColor: "var(--color-sharp-orange)" }}
+                    >
+                      Delete
+                    </button>
                   <button
                     onClick={() => {
                       // Proceed to contact selection for current company
@@ -540,7 +634,7 @@ export default function HermesPage() {
               </div>
             </div>
           </div>
-        ) : (
+        ) : step === 4 ? (
           <div className="mx-auto max-w-6xl space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-xl md:text-2xl font-medium tracking-tight">Email generation</h2>
@@ -600,7 +694,10 @@ export default function HermesPage() {
                       />
                       <div className="flex justify-end mt-auto">
                         <button
-                          onClick={() => { /* send placeholder */ }}
+                          onClick={() => {
+                            // send placeholder then advance
+                            advanceToNextContactOrCompany();
+                          }}
                           className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-90"
                           style={{ backgroundColor: "var(--color-turquoise)" }}
                         >
@@ -649,21 +746,13 @@ export default function HermesPage() {
                     </button>
                     <div className="flex items-center gap-3">
                       <button
-                        onClick={() => { /* hold placeholder */ }}
+                        onClick={() => openActionModal("hold")}
                         className="px-5 py-2.5 rounded-xl border bg-secondary text-foreground hover:bg-secondary/80"
                       >
                         Hold
                       </button>
                       <button
-                        onClick={() => {
-                          const selected = (contactsByCompany[currentCompanyIndex] || []).filter((c) => c.selected);
-                          const nextIndex = currentContactIndex + 1;
-                          if (nextIndex < selected.length) {
-                            setCurrentContactIndex(nextIndex);
-                          } else {
-                            advanceToNextCompanyOrFinish();
-                          }
-                        }}
+                        onClick={advanceToNextContactOrCompany}
                         className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-90"
                         style={{ backgroundColor: "var(--color-turquoise)" }}
                       >
@@ -677,11 +766,149 @@ export default function HermesPage() {
               );
             })()}
           </div>
-        )}
+        ) : null}
         {step === 5 ? (
           <div className="mx-auto max-w-3xl text-center py-24">
             <h2 className="text-2xl md:text-3xl font-semibold mb-2">Done</h2>
             <p className="text-sm text-muted-foreground">All contacts across companies have been processed.</p>
+          </div>
+        ) : null}
+        {step === 6 && lastAction?.type === "hold" ? (
+          <div className="mx-auto max-w-3xl space-y-4 py-16">
+            <h2 className="text-2xl font-semibold">Placed on hold</h2>
+            <div className="rounded-xl ring-1 ring-border/40 bg-secondary/60 p-5 text-sm">
+              <div className="mb-2"><span className="text-muted-foreground">Company:</span> {lastAction.companyName}</div>
+              <div className="text-muted-foreground">Note:</div>
+              <div className="whitespace-pre-wrap">{lastAction.note}</div>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setStep(2)}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border hover:bg-secondary"
+                style={{ borderColor: "#0077D1", color: "#0077D1" }}
+              >
+                <ArrowLeft className="w-4 h-4" /> Back to research
+              </button>
+              <button
+                onClick={() => {
+                  // Continue to next company's contacts or Done
+                  const nextIndex = lastAction?.toIndex ?? null;
+                  if (nextIndex === null) {
+                    setStep(5);
+                    return;
+                  }
+                  setCurrentCompanyIndex(nextIndex);
+                  seedContactsForCompanyIfMissing(nextIndex);
+                  setCurrentContactIndex(0);
+                  setStep(3);
+                }}
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-90"
+                style={{ backgroundColor: "var(--color-turquoise)" }}
+              >
+                Continue
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {step === 7 && lastAction?.type === "delete" ? (
+          <div className="mx-auto max-w-3xl space-y-4 py-16">
+            <h2 className="text-2xl font-semibold">Deleted company</h2>
+            <div className="rounded-xl ring-1 ring-border/40 bg-secondary/60 p-5 text-sm">
+              <div className="mb-2"><span className="text-muted-foreground">Company:</span> {lastAction.companyName}</div>
+              <div className="text-muted-foreground">Note:</div>
+              <div className="whitespace-pre-wrap">{lastAction.note}</div>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setStep(2)}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border hover:bg-secondary"
+                style={{ borderColor: "#0077D1", color: "#0077D1" }}
+              >
+                <ArrowLeft className="w-4 h-4" /> Back to research
+              </button>
+              <button
+                onClick={() => {
+                  const nextIndex = lastAction?.toIndex ?? null;
+                  if (nextIndex === null) {
+                    setStep(5);
+                    return;
+                  }
+                  setCurrentCompanyIndex(nextIndex);
+                  seedContactsForCompanyIfMissing(nextIndex);
+                  setCurrentContactIndex(0);
+                  setStep(3);
+                }}
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-90"
+                style={{ backgroundColor: "var(--color-turquoise)" }}
+              >
+                Continue
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Confirmation Modal */}
+        {showConfirmModal ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/40" onClick={cancelActionModal} />
+            <div className="relative w-full max-w-md rounded-2xl bg-background ring-1 ring-border/40 p-6 space-y-4">
+              <div className="text-lg font-medium">{pendingAction === "hold" ? "Put company on hold?" : "Delete company?"}</div>
+              <p className="text-sm text-muted-foreground">
+                Are you sure you want to {pendingAction === "hold" ? "hold" : "delete"} {companies[currentCompanyIndex]?.name || "this company"}?
+              </p>
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  onClick={cancelActionModal}
+                  className="px-4 py-2 rounded-xl border hover:bg-secondary"
+                  style={{ borderColor: "#0077D1", color: "#0077D1" }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmActionProceed}
+                  className="px-5 py-2.5 rounded-xl text-primary-foreground hover:opacity-90"
+                  style={{ backgroundColor: "var(--color-turquoise)" }}
+                >
+                  Yes
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Note Modal */}
+        {showNoteModal ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/40" onClick={cancelActionModal} />
+            <div className="relative w-full max-w-lg rounded-2xl bg-background ring-1 ring-border/40 p-6 space-y-4">
+              <div className="text-lg font-medium">Add a note ({pendingAction})</div>
+              <textarea
+                value={actionNote}
+                onChange={(e) => setActionNote(e.target.value)}
+                rows={6}
+                placeholder={pendingAction === "hold" ? "Why is this on hold?" : "Why is this being deleted?"}
+                className="w-full rounded-xl bg-secondary/60 border border-transparent p-3 text-sm"
+              />
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  onClick={cancelActionModal}
+                  className="px-4 py-2 rounded-xl border hover:bg-secondary"
+                  style={{ borderColor: "#0077D1", color: "#0077D1" }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={submitActionNote}
+                  disabled={!actionNote.trim()}
+                  className="px-5 py-2.5 rounded-xl text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                  style={{ backgroundColor: "var(--color-turquoise)" }}
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
           </div>
         ) : null}
       </div>
