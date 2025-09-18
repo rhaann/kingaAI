@@ -2,16 +2,18 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Trash2, Plus, ArrowLeft, ArrowRight } from "lucide-react";
+import { Trash2, Plus, ArrowLeft, ArrowRight, Check } from "lucide-react";
 
 type ParsedCompany = {
   name: string;
   website?: string;
   contactName?: string;
   contactEmail?: string;
+  contacts?: Array<{ name?: string; email?: string; title?: string }>;
 };
 
 const MAX_COMPANIES = 10;
+const SWIPE_THRESH = 40; // px
 
 export default function HermesPage() {
   const router = useRouter();
@@ -20,14 +22,17 @@ export default function HermesPage() {
   const [companies, setCompanies] = useState<ParsedCompany[]>([]);
 
   const canProceedFromInput = useMemo(() => inputText.trim().length > 0, [inputText]);
-  const progressPct = step === -1 ? 0 : step === 0 ? 20 : step === 1 ? 40 : step === 2 ? 60 : step === 3 ? 80 : 100;
+  const progressPct =
+    step === -1 ? 0 : step === 0 ? 20 : step === 1 ? 40 : step === 2 ? 60 : step === 3 ? 80 : 100;
   const [currentCompanyIndex, setCurrentCompanyIndex] = useState(0);
   const [onHold, setOnHold] = useState<ParsedCompany[]>([]);
   const [deleted, setDeleted] = useState<ParsedCompany[]>([]);
   type Contact = { id: string; name: string; title: string; email: string; selected: boolean };
   const [contactsByCompany, setContactsByCompany] = useState<Record<number, Contact[]>>({});
   const [currentContactIndex, setCurrentContactIndex] = useState(0);
-  const [emailDraftsByCompany, setEmailDraftsByCompany] = useState<Record<number, Record<string, { subject: string; body: string }>>>({});
+  const [emailDraftsByCompany, setEmailDraftsByCompany] = useState<
+    Record<number, Record<string, { subject: string; body: string }>>
+  >({});
   const [improveNotes, setImproveNotes] = useState("");
   const [pendingAction, setPendingAction] = useState<null | "hold" | "delete">(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -38,14 +43,37 @@ export default function HermesPage() {
   const [lastAction, setLastAction] = useState<
     null | { type: "hold" | "delete"; companyName: string; note: string; fromIndex: number; toIndex: number | null }
   >(null);
+
+  // Landing interactions
   const [isLandingAnimating, setIsLandingAnimating] = useState(false);
+  const [touchStartY, setTouchStartY] = useState<number | null>(null);
+  const [ctaPressed, setCtaPressed] = useState(false); // shows quick check on press
+
+  function goFromLandingToStep0() {
+    setIsLandingAnimating(true);
+    setTimeout(() => {
+      setInputText("");
+      setStep(0);
+      setIsLandingAnimating(false);
+      setCtaPressed(false);
+    }, 320); // keep in sync with CSS duration
+  }
 
   // Ensure contacts exist for a company if we have seed data from parsing
   function seedContactsForCompanyIfMissing(index: number): Contact[] {
     let seeded: Contact[] = (contactsByCompany[index] || []).slice();
     if (seeded.length === 0) {
       const c = companies[index];
-      if (c?.contactEmail || c?.contactName) {
+      const parsedContacts = (c?.contacts || []).filter((pc) => pc.email || pc.name);
+      if (parsedContacts.length > 0) {
+        seeded = parsedContacts.map((pc) => ({
+          id: crypto.randomUUID(),
+          name: pc.name || "",
+          title: pc.title || "",
+          email: pc.email || "",
+          selected: true,
+        }));
+      } else if (c?.contactEmail || c?.contactName) {
         seeded.push({
           id: crypto.randomUUID(),
           name: c.contactName || "",
@@ -53,8 +81,8 @@ export default function HermesPage() {
           email: c.contactEmail || "",
           selected: true,
         });
-        setContactsByCompany((prev) => ({ ...prev, [index]: seeded }));
       }
+      if (seeded.length > 0) setContactsByCompany((prev) => ({ ...prev, [index]: seeded }));
     }
     return seeded;
   }
@@ -161,18 +189,23 @@ export default function HermesPage() {
     for (const block of blocks) {
       if (results.length >= MAX_COMPANIES) break;
 
-      const emails = Array.from(block.matchAll(emailRe)).map((m) => m[0]);
+      const emailMatches = Array.from(block.matchAll(emailRe));
+      const emails = emailMatches.map((m) => m[0]);
       const urls = Array.from(block.matchAll(urlRe)).map((m) => m[1]);
 
       const lines = block.split(/\n+/).map((l) => l.trim()).filter(Boolean);
 
-      // Try to get a contact name from text immediately before the first email
-      let contactName: string | undefined;
-      if (emails[0]) {
-        const before = block.slice(0, block.indexOf(emails[0]));
+      // Build contacts from all emails, infer names from text immediately before each email
+      const contacts: Array<{ name?: string; email?: string; title?: string }> = emailMatches.map((m) => {
+        const email = m[0];
+        const matchIndex = (m as any).index ?? block.indexOf(email);
+        const before = block.slice(0, matchIndex);
         const lastChunk = before.split(/[,|\n]/).pop()?.trim() || "";
-        if (lastChunk.split(/\s+/).length >= 2) contactName = toTitleCase(lastChunk).slice(0, 120);
-      }
+        let inferredName: string | undefined;
+        if (lastChunk.split(/\s+/).length >= 2) inferredName = toTitleCase(lastChunk).slice(0, 120);
+        return { name: inferredName, email };
+      });
+      const firstContact = contacts[0];
 
       // Choose a company name: first non-email/non-url line; otherwise from domain
       let candidateName = lines.find((l) => !emailRe.test(l) && !urlRe.test(l));
@@ -180,7 +213,8 @@ export default function HermesPage() {
 
       const name = toTitleCase(candidateName || "").slice(0, 120);
       const website = urls[0] || undefined;
-      const contactEmail = emails[0] || undefined;
+      const contactEmail = firstContact?.email || undefined;
+      const contactName = firstContact?.name || undefined;
 
       if (!name && !website && !contactEmail) continue;
 
@@ -188,12 +222,13 @@ export default function HermesPage() {
       if (seen.has(key)) continue;
       seen.add(key);
 
-      results.push({ name, website, contactName, contactEmail });
+      results.push({ name, website, contactName, contactEmail, contacts });
     }
 
     // If the user entered text but we found no blank-line blocks, treat the entire input as one company
     if (results.length === 0 && raw.trim()) {
-      const emails = Array.from(raw.matchAll(emailRe)).map((m) => m[0]);
+      const emailMatches = Array.from(raw.matchAll(emailRe));
+      const emails = emailMatches.map((m) => m[0]);
       const urls = Array.from(raw.matchAll(urlRe)).map((m) => m[1]);
       let candidateName = raw
         .replace(emailRe, " ")
@@ -203,7 +238,16 @@ export default function HermesPage() {
         .trim();
       if (!candidateName && urls[0]) candidateName = normalizeDomainToName(urls[0]);
       const name = toTitleCase(candidateName).slice(0, 120);
-      results.push({ name, website: urls[0], contactEmail: emails[0] });
+      const contacts: Array<{ name?: string; email?: string; title?: string }> = emailMatches.map((m) => {
+        const email = m[0];
+        const matchIndex = (m as any).index ?? raw.indexOf(email);
+        const before = raw.slice(0, matchIndex);
+        const lastChunk = before.split(/[,|\n]/).pop()?.trim() || "";
+        let inferredName: string | undefined;
+        if (lastChunk.split(/\s+/).length >= 2) inferredName = toTitleCase(lastChunk).slice(0, 120);
+        return { name: inferredName, email };
+      });
+      results.push({ name, website: urls[0], contactEmail: emails[0], contactName: contacts[0]?.name, contacts });
     }
 
     return results.slice(0, MAX_COMPANIES);
@@ -226,6 +270,52 @@ export default function HermesPage() {
 
   function updateCompany(index: number, patch: Partial<ParsedCompany>) {
     setCompanies((prev) => prev.map((c, i) => (i === index ? { ...c, ...patch } : c)));
+  }
+
+  // Manage contacts within a company during the Review step
+  function ensureContactsForReview(index: number): Array<{ name?: string; email?: string; title?: string }> {
+    const c = companies[index];
+    const existing = c.contacts || [];
+    if (existing.length === 0 && (c.contactName || c.contactEmail)) {
+      const seeded = [{ name: c.contactName, email: c.contactEmail, title: "" }];
+      setCompanies((prev) => prev.map((co, i) => (i === index ? { ...co, contacts: seeded } : co)));
+      return seeded;
+    }
+    return existing;
+  }
+
+  function addCompanyContact(index: number) {
+    setCompanies((prev) =>
+      prev.map((co, i) =>
+        i === index ? { ...co, contacts: [ ...(co.contacts || []), { name: "", title: "", email: "" } ] } : co
+      )
+    );
+  }
+
+  function updateCompanyContact(
+    index: number,
+    contactIndex: number,
+    patch: Partial<{ name?: string; email?: string; title?: string }>
+  ) {
+    setCompanies((prev) =>
+      prev.map((co, i) => {
+        if (i !== index) return co;
+        const list = [ ...(co.contacts || []) ];
+        list[contactIndex] = { ...list[contactIndex], ...patch };
+        return { ...co, contacts: list };
+      })
+    );
+  }
+
+  function removeCompanyContact(index: number, contactIndex: number) {
+    setCompanies((prev) =>
+      prev.map((co, i) => {
+        if (i !== index) return co;
+        const list = [ ...(co.contacts || []) ];
+        list.splice(contactIndex, 1);
+        return { ...co, contacts: list };
+      })
+    );
   }
 
   return (
@@ -255,34 +345,60 @@ export default function HermesPage() {
 
         {step === -1 ? (
           <div
-            className="mx-auto max-w-2xl flex flex-col items-center justify-center text-center"
-            style={{ minHeight: "60vh", transform: isLandingAnimating ? "translateY(-120%)" : "translateY(0)", transition: "transform 320ms ease-in-out" }}
+            className={`relative mx-auto max-w-2xl flex flex-col items-center justify-center text-center
+                        min-h-[60vh] transition-transform duration-300 ease-in-out
+                        ${isLandingAnimating ? "-translate-y-[120%]" : "translate-y-0"}`}
+            onTouchStart={(e) => setTouchStartY(e.changedTouches[0].clientY)}
+            onTouchEnd={(e) => {
+              const endY = e.changedTouches[0].clientY;
+              if (touchStartY !== null && touchStartY - endY > SWIPE_THRESH) {
+                setCtaPressed(true); // mimic pressed state on swipe
+                setTimeout(goFromLandingToStep0, 200);
+              }
+              setTouchStartY(null);
+            }}
           >
-           
             <div className="flex flex-col gap-4 w-full max-w-md mx-auto">
               <button
                 type="button"
                 onClick={() => {
-                  setIsLandingAnimating(true);
-                  setTimeout(() => {
-                    setStep(0);
-                    setIsLandingAnimating(false);
-                  }, 320);
+                  setCtaPressed(true);
+                  setTimeout(goFromLandingToStep0, 200);
                 }}
-                className="px-8 py-4 md:py-5 rounded-2xl text-xl text-primary-foreground hover:opacity-90 w-full"
+                className="group relative overflow-hidden px-8 py-4 md:py-5 rounded-2xl text-xl text-primary-foreground hover:opacity-95 w-full
+                           transition-transform active:scale-[0.98]"
                 style={{ backgroundColor: "var(--color-turquoise)" }}
+                aria-label="Get started"
               >
-                Get Started
+                <span className={`inline-flex items-center gap-2 transition-opacity ${ctaPressed ? "opacity-0" : "opacity-100"}`}>
+                  Get Started
+                  <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-1" />
+                </span>
+                {/* quick check flash */}
+                <span className={`absolute inset-0 flex items-center justify-center transition-opacity ${ctaPressed ? "opacity-100" : "opacity-0"}`}>
+                  <Check className="h-5 w-5" />
+                </span>
+                {/* sheen sweep */}
+                <span
+                  className="pointer-events-none absolute left-[-120%] top-0 h-full w-1/2
+                             bg-white/10 blur-md transform transition-transform duration-500
+                             group-hover:translate-x-[260%]"
+                />
               </button>
+
               <button
                 type="button"
                 onClick={() => router.push("/activity")}
-                className="px-8 py-4 md:py-5 rounded-2xl text-xl border hover:bg-secondary w-full"
+                className="px-8 py-4 md:py-5 rounded-2xl text-xl border hover:bg-secondary w-full transition-colors"
                 style={{ borderColor: "#0077D1", color: "#0077D1" }}
               >
                 View Queue
               </button>
             </div>
+
+            {/* Down-arrow CTA (micro “press → check”) */}
+           
+            
           </div>
         ) : step === 0 ? (
           <div className="mx-auto max-w-3xl">
@@ -300,7 +416,9 @@ export default function HermesPage() {
               />
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>We’ll parse names, sites, and emails.</span>
-                <span className="px-2 py-0.5 rounded-md bg-secondary/80">{Math.min(parseCompaniesFromInput(inputText).length, MAX_COMPANIES)} detected</span>
+                <span className="px-2 py-0.5 rounded-md bg-secondary/80">
+                  {Math.min(parseCompaniesFromInput(inputText).length, MAX_COMPANIES)} detected
+                </span>
               </div>
               <div className="flex items-center justify-between gap-2 mt-2">
                 <button
@@ -314,11 +432,16 @@ export default function HermesPage() {
                 <button
                   disabled={!canProceedFromInput}
                   onClick={handleParse}
-                  className="inline-flex items-center gap-2 px-5 py-3 rounded-xl text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                  className="group relative overflow-hidden inline-flex items-center gap-2 px-5 py-3 rounded-xl text-primary-foreground hover:opacity-95 disabled:opacity-50 transition-transform active:scale-[0.98]"
                   style={{ backgroundColor: "var(--color-turquoise)" }}
                 >
-                  <span>Parse & Review</span>
-                  <ArrowRight className="w-4 h-4" />
+                  <span className="transition-transform group-hover:translate-x-0.5">Parse & Review</span>
+                  <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
+                  <span
+                    className="pointer-events-none absolute left-[-120%] top-0 h-full w-1/2
+                               bg-white/10 blur-md transform transition-transform duration-500
+                               group-hover:translate-x-[260%]"
+                  />
                 </button>
               </div>
             </div>
@@ -327,7 +450,9 @@ export default function HermesPage() {
           <div className="mx-auto max-w-6xl space-y-8">
             <div className="flex items-center justify-between">
               <h2 className="text-xl md:text-2xl font-medium tracking-tight">Review companies</h2>
-              <div className="px-2 py-1 rounded-md text-xs bg-secondary text-muted-foreground">{companies.length}/{MAX_COMPANIES}</div>
+              <div className="px-2 py-1 rounded-md text-xs bg-secondary text-muted-foreground">
+                {companies.length}/{MAX_COMPANIES}
+              </div>
             </div>
 
             <div className="space-y-3">
@@ -335,43 +460,77 @@ export default function HermesPage() {
                 <div className="text-sm text-muted-foreground">No companies parsed. Add manually below.</div>
               )}
 
-              {companies.map((c, i) => (
-                <div key={i} className="grid grid-cols-1 sm:grid-cols-6 md:grid-cols-12 gap-3 bg-secondary/70 rounded-2xl p-4 shadow-sm ring-1 ring-border/40">
-                  <input
-                    value={c.name}
-                    onChange={(e) => updateCompany(i, { name: e.target.value })}
-                    placeholder="Company name"
-                    className="sm:col-span-6 md:col-span-4 rounded-lg bg-background border border-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                  />
-                  <input
-                    value={c.website || ""}
-                    onChange={(e) => updateCompany(i, { website: e.target.value })}
-                    placeholder="Website"
-                    className="sm:col-span-6 md:col-span-3 rounded-lg bg-background border border-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                  />
-                  <input
-                    value={c.contactName || ""}
-                    onChange={(e) => updateCompany(i, { contactName: e.target.value })}
-                    placeholder="Contact name"
-                    className="sm:col-span-6 md:col-span-2 rounded-lg bg-background border border-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                  />
-                  <div className="sm:col-span-6 md:col-span-3 relative">
-                    <input
-                      value={c.contactEmail || ""}
-                      onChange={(e) => updateCompany(i, { contactEmail: e.target.value })}
-                      placeholder="Contact email"
-                      className="w-full pr-9 rounded-lg bg-background border border-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    />
-                    <button
-                      onClick={() => handleRemoveRow(i)}
-                      className="absolute right-1.5 top-1/2 -translate-y-1/2 p-2 rounded-md hover:bg-background/60 text-muted-foreground"
-                      aria-label="Delete row"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+              {companies.map((c, i) => {
+                const contacts = ensureContactsForReview(i);
+                return (
+                  <div
+                    key={i}
+                    className="space-y-3 bg-secondary/70 rounded-2xl p-4 shadow-sm ring-1 ring-border/40"
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-6 md:grid-cols-12 gap-3">
+                      <input
+                        value={c.name}
+                        onChange={(e) => updateCompany(i, { name: e.target.value })}
+                        placeholder="Company name"
+                        className="sm:col-span-6 md:col-span-4 rounded-lg bg-background border border-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      />
+                      <input
+                        value={c.website || ""}
+                        onChange={(e) => updateCompany(i, { website: e.target.value })}
+                        placeholder="Website"
+                        className="sm:col-span-6 md:col-span-3 rounded-lg bg-background border border-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-xs text-muted-foreground">Contacts</div>
+                      {contacts.map((p, ci) => (
+                        <div key={ci} className="grid grid-cols-1 sm:grid-cols-6 md:grid-cols-12 gap-3 items-center">
+                          <input
+                            value={p.name || ""}
+                            onChange={(e) => updateCompanyContact(i, ci, { name: e.target.value })}
+                            placeholder="Contact name"
+                            className="sm:col-span-6 md:col-span-4 rounded-lg bg-background border border-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          />
+                          <input
+                            value={p.email || ""}
+                            onChange={(e) => updateCompanyContact(i, ci, { email: e.target.value })}
+                            placeholder="Contact email"
+                            className="sm:col-span-6 md:col-span-5 rounded-lg bg-background border border-transparent px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          />
+                          <div className="sm:col-span-6 md:col-span-3 flex justify-end">
+                            <button
+                              onClick={() => removeCompanyContact(i, ci)}
+                              className="p-2 rounded-md hover:bg-background/60 text-muted-foreground"
+                              aria-label="Remove contact"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      <button
+                        onClick={() => addCompanyContact(i)}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border hover:bg-secondary"
+                        style={{ borderColor: "#0077D1", color: "#0077D1" }}
+                      >
+                        <Plus className="w-4 h-4" /> Add contact
+                      </button>
+                    </div>
+
+                    <div className="flex justify-end">
+                      <button
+                        onClick={() => handleRemoveRow(i)}
+                        className="px-3 py-2 rounded-lg border hover:bg-secondary"
+                        style={{ borderColor: "#b91c1c", color: "#b91c1c" }}
+                        aria-label="Delete company"
+                      >
+                        Delete company
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -395,12 +554,20 @@ export default function HermesPage() {
                 </button>
               </div>
               <button
-                onClick={() => { setCurrentCompanyIndex(0); setStep(2); }}
-                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-90 w-full sm:w-auto"
+                onClick={() => {
+                  setCurrentCompanyIndex(0);
+                  setStep(2);
+                }}
+                className="group relative overflow-hidden inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-95 w-full sm:w-auto transition-transform active:scale-[0.98]"
                 style={{ backgroundColor: "var(--color-turquoise)" }}
               >
                 <span>Next</span>
-                <ArrowRight className="w-4 h-4" />
+                <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
+                <span
+                  className="pointer-events-none absolute left-[-120%] top-0 h-full w-1/2
+                             bg-white/10 blur-md transform transition-transform duration-500
+                             group-hover:translate-x-[260%]"
+                />
               </button>
             </div>
           </div>
@@ -419,7 +586,9 @@ export default function HermesPage() {
               <div className="rounded-2xl ring-1 ring-border/40 bg-secondary/60 p-5 md:p-6 space-y-4">
                 <div className="text-center">
                   <div className="text-sm text-muted-foreground">Company</div>
-                  <div className="text-lg font-semibold">{companies[currentCompanyIndex]?.name || "Unnamed"}</div>
+                  <div className="text-lg font-semibold">
+                    {companies[currentCompanyIndex]?.name || "Unnamed"}
+                  </div>
                 </div>
                 <div className="text-sm text-muted-foreground leading-relaxed">
                   {/* Placeholder research summary */}
@@ -471,34 +640,25 @@ export default function HermesPage() {
                     >
                       Delete
                     </button>
-                  <button
-                    onClick={() => {
-                      // Proceed to contact selection for current company
-                      // initialize contacts if absent
-                      setContactsByCompany((prev) => {
-                        if (prev[currentCompanyIndex]) return prev;
-                        const seed: Contact[] = [];
-                        const c = companies[currentCompanyIndex];
-                        if (c?.contactEmail || c?.contactName) {
-                          seed.push({
-                            id: crypto.randomUUID(),
-                            name: c.contactName || "",
-                            title: "",
-                            email: c.contactEmail || "",
-                            selected: true,
-                          });
-                        }
-                        return { ...prev, [currentCompanyIndex]: seed };
-                      });
-                      setCurrentContactIndex(0);
-                      setStep(3);
-                    }}
-                    className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-90"
-                    style={{ backgroundColor: "var(--color-turquoise)" }}
-                  >
-                    <span>Next</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
+                    <button
+                      onClick={() => {
+                        // Proceed to contact selection for current company
+                        // seed all parsed contacts if present
+                        seedContactsForCompanyIfMissing(currentCompanyIndex);
+                        setCurrentContactIndex(0);
+                        setStep(3);
+                      }}
+                      className="group relative overflow-hidden inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-95 transition-transform active:scale-[0.98]"
+                      style={{ backgroundColor: "var(--color-turquoise)" }}
+                    >
+                      <span>Next</span>
+                      <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
+                      <span
+                        className="pointer-events-none absolute left-[-120%] top-0 h-full w-1/2
+                                   bg-white/10 blur-md transform transition-transform duration-500
+                                   group-hover:translate-x-[260%]"
+                      />
+                    </button>
                   </div>
                 </div>
               </div>
@@ -508,12 +668,17 @@ export default function HermesPage() {
           <div className="mx-auto max-w-6xl space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-xl md:text-2xl font-medium tracking-tight">Contact selection</h2>
-              <div className="text-sm text-muted-foreground">{companies[currentCompanyIndex]?.name || "Company"}</div>
+              <div className="text-sm text-muted-foreground">
+                {companies[currentCompanyIndex]?.name || "Company"}
+              </div>
             </div>
 
             <div className="space-y-3">
               {(contactsByCompany[currentCompanyIndex] || []).map((p, idx) => (
-                <div key={p.id} className="grid grid-cols-12 gap-3 bg-secondary/60 rounded-2xl p-4 ring-1 ring-border/40 items-center">
+                <div
+                  key={p.id}
+                  className="grid grid-cols-12 gap-3 bg-secondary/60 rounded-2xl p-4 ring-1 ring-border/40 items-center"
+                >
                   <div className="col-span-12 sm:col-span-1 flex items-center justify-center">
                     <input
                       type="checkbox"
@@ -611,12 +776,17 @@ export default function HermesPage() {
                   onClick={() => {
                     const selected = (contactsByCompany[currentCompanyIndex] || []).filter((c) => c.selected);
                     setEmailDraftsByCompany((prev) => {
-                      const map = { ...(prev[currentCompanyIndex] || {}) } as Record<string, { subject: string; body: string }>;
+                      const map = { ...(prev[currentCompanyIndex] || {}) } as Record<
+                        string,
+                        { subject: string; body: string }
+                      >;
                       selected.forEach((c) => {
                         if (!map[c.id]) {
                           map[c.id] = {
                             subject: `${companies[currentCompanyIndex]?.name || ""} — quick intro`,
-                            body: `Hi ${c.name || "there"},\n\nI wanted to share a quick idea on how we can help ${companies[currentCompanyIndex]?.name || "your team"}.\n\nBest,\n`,
+                            body: `Hi ${c.name || "there"},\n\nI wanted to share a quick idea on how we can help ${
+                              companies[currentCompanyIndex]?.name || "your team"
+                            }.\n\nBest,\n`,
                           };
                         }
                       });
@@ -625,16 +795,22 @@ export default function HermesPage() {
                     setCurrentContactIndex(0);
                     setStep(4);
                   }}
-                  className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-90"
+                  className="group relative overflow-hidden inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-95 transition-transform active:scale-[0.98]"
                   style={{ backgroundColor: "var(--color-turquoise)" }}
                 >
                   Next
-                  <ArrowRight className="w-4 h-4" />
+                  <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
+                  <span
+                    className="pointer-events-none absolute left-[-120%] top-0 h-full w-1/2
+                               bg-white/10 blur-md transform transition-transform duration-500
+                               group-hover:translate-x-[260%]"
+                  />
                 </button>
               </div>
             </div>
           </div>
-        ) : step === 4 ? (
+        ) : null}
+        {step === 4 ? (
           <div className="mx-auto max-w-6xl space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-xl md:text-2xl font-medium tracking-tight">Email generation</h2>
@@ -650,7 +826,11 @@ export default function HermesPage() {
               const selected = (contactsByCompany[currentCompanyIndex] || []).filter((c) => c.selected);
               const cur = selected[currentContactIndex] || selected[0];
               if (!cur) {
-                return <div className="text-sm text-muted-foreground">No contacts selected. Go back and choose at least one.</div>;
+                return (
+                  <div className="text-sm text-muted-foreground">
+                    No contacts selected. Go back and choose at least one.
+                  </div>
+                );
               }
               const draftsForCompany = emailDraftsByCompany[currentCompanyIndex] || {};
               const draft = draftsForCompany[cur.id] || { subject: "", body: "" };
@@ -662,9 +842,7 @@ export default function HermesPage() {
                       <div className="text-xs text-muted-foreground">Sending to</div>
                       <div className="text-sm text-foreground">
                         {cur.name || cur.email || "Recipient"}
-                        {cur.title ? (
-                          <span className="text-muted-foreground"> — {cur.title}</span>
-                        ) : null}
+                        {cur.title ? <span className="text-muted-foreground"> — {cur.title}</span> : null}
                       </div>
                       <div className="text-xs text-muted-foreground">{cur.email}</div>
                       <input
@@ -698,10 +876,15 @@ export default function HermesPage() {
                             // send placeholder then advance
                             advanceToNextContactOrCompany();
                           }}
-                          className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-90"
+                          className="group relative overflow-hidden inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-95 transition-transform active:scale-[0.98]"
                           style={{ backgroundColor: "var(--color-turquoise)" }}
                         >
                           Send
+                          <span
+                            className="pointer-events-none absolute left-[-120%] top-0 h-full w-1/2
+                                       bg-white/10 blur-md transform transition-transform duration-500
+                                       group-hover:translate-x-[260%]"
+                          />
                         </button>
                       </div>
                     </div>
@@ -727,10 +910,15 @@ export default function HermesPage() {
                             });
                             setImproveNotes("");
                           }}
-                          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-primary-foreground hover:opacity-90"
+                          className="group relative overflow-hidden inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-primary-foreground hover:opacity-95 transition-transform active:scale-[0.98]"
                           style={{ backgroundColor: "var(--color-turquoise)" }}
                         >
                           Apply
+                          <span
+                            className="pointer-events-none absolute left-[-120%] top-0 h-full w-1/2
+                                       bg-white/10 blur-md transform transition-transform duration-500
+                                       group-hover:translate-x-[260%]"
+                          />
                         </button>
                       </div>
                     </div>
@@ -753,11 +941,16 @@ export default function HermesPage() {
                       </button>
                       <button
                         onClick={advanceToNextContactOrCompany}
-                        className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-90"
+                        className="group relative overflow-hidden inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-95 transition-transform active:scale-[0.98]"
                         style={{ backgroundColor: "var(--color-turquoise)" }}
                       >
                         Next
-                        <ArrowRight className="w-4 h-4" />
+                        <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
+                        <span
+                          className="pointer-events-none absolute left-[-120%] top-0 h-full w-1/2
+                                     bg-white/10 blur-md transform transition-transform duration-500
+                                     group-hover:translate-x-[260%]"
+                        />
                       </button>
                     </div>
                   </div>
@@ -771,13 +964,24 @@ export default function HermesPage() {
           <div className="mx-auto max-w-3xl text-center py-24">
             <h2 className="text-2xl md:text-3xl font-semibold mb-2">Done</h2>
             <p className="text-sm text-muted-foreground">All contacts across companies have been processed.</p>
+            <div className="mt-8 flex justify-center">
+              <button
+                onClick={() => setStep(-1)}
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-95"
+                style={{ backgroundColor: "var(--color-turquoise)" }}
+              >
+                Home
+              </button>
+            </div>
           </div>
         ) : null}
         {step === 6 && lastAction?.type === "hold" ? (
           <div className="mx-auto max-w-3xl space-y-4 py-16">
             <h2 className="text-2xl font-semibold">Placed on hold</h2>
             <div className="rounded-xl ring-1 ring-border/40 bg-secondary/60 p-5 text-sm">
-              <div className="mb-2"><span className="text-muted-foreground">Company:</span> {lastAction.companyName}</div>
+              <div className="mb-2">
+                <span className="text-muted-foreground">Company:</span> {lastAction.companyName}
+              </div>
               <div className="text-muted-foreground">Note:</div>
               <div className="whitespace-pre-wrap">{lastAction.note}</div>
             </div>
@@ -802,11 +1006,16 @@ export default function HermesPage() {
                   setCurrentContactIndex(0);
                   setStep(3);
                 }}
-                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-90"
+                className="group relative overflow-hidden inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-95 transition-transform active:scale-[0.98]"
                 style={{ backgroundColor: "var(--color-turquoise)" }}
               >
                 Continue
-                <ArrowRight className="w-4 h-4" />
+                <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
+                <span
+                  className="pointer-events-none absolute left-[-120%] top-0 h-full w-1/2
+                             bg-white/10 blur-md transform transition-transform duration-500
+                             group-hover:translate-x-[260%]"
+                />
               </button>
             </div>
           </div>
@@ -815,7 +1024,9 @@ export default function HermesPage() {
           <div className="mx-auto max-w-3xl space-y-4 py-16">
             <h2 className="text-2xl font-semibold">Deleted company</h2>
             <div className="rounded-xl ring-1 ring-border/40 bg-secondary/60 p-5 text-sm">
-              <div className="mb-2"><span className="text-muted-foreground">Company:</span> {lastAction.companyName}</div>
+              <div className="mb-2">
+                <span className="text-muted-foreground">Company:</span> {lastAction.companyName}
+              </div>
               <div className="text-muted-foreground">Note:</div>
               <div className="whitespace-pre-wrap">{lastAction.note}</div>
             </div>
@@ -839,11 +1050,16 @@ export default function HermesPage() {
                   setCurrentContactIndex(0);
                   setStep(3);
                 }}
-                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-90"
+                className="group relative overflow-hidden inline-flex items-center gap-2 px-6 py-3 rounded-xl text-primary-foreground hover:opacity-95 transition-transform active:scale-[0.98]"
                 style={{ backgroundColor: "var(--color-turquoise)" }}
               >
                 Continue
-                <ArrowRight className="w-4 h-4" />
+                <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
+                <span
+                  className="pointer-events-none absolute left-[-120%] top-0 h-full w-1/2
+                             bg-white/10 blur-md transform transition-transform duration-500
+                             group-hover:translate-x-[260%]"
+                />
               </button>
             </div>
           </div>
@@ -854,9 +1070,12 @@ export default function HermesPage() {
           <div className="fixed inset-0 z-50 flex items-center justify-center">
             <div className="absolute inset-0 bg-black/40" onClick={cancelActionModal} />
             <div className="relative w-full max-w-md rounded-2xl bg-background ring-1 ring-border/40 p-6 space-y-4">
-              <div className="text-lg font-medium">{pendingAction === "hold" ? "Put company on hold?" : "Delete company?"}</div>
+              <div className="text-lg font-medium">
+                {pendingAction === "hold" ? "Put company on hold?" : "Delete company?"}
+              </div>
               <p className="text-sm text-muted-foreground">
-                Are you sure you want to {pendingAction === "hold" ? "hold" : "delete"} {companies[currentCompanyIndex]?.name || "this company"}?
+                Are you sure you want to {pendingAction === "hold" ? "hold" : "delete"}{" "}
+                {companies[currentCompanyIndex]?.name || "this company"}?
               </p>
               <div className="flex justify-end gap-3 pt-2">
                 <button
@@ -868,10 +1087,15 @@ export default function HermesPage() {
                 </button>
                 <button
                   onClick={confirmActionProceed}
-                  className="px-5 py-2.5 rounded-xl text-primary-foreground hover:opacity-90"
+                  className="group relative overflow-hidden px-5 py-2.5 rounded-xl text-primary-foreground hover:opacity-95 transition-transform active:scale-[0.98]"
                   style={{ backgroundColor: "var(--color-turquoise)" }}
                 >
                   Yes
+                  <span
+                    className="pointer-events-none absolute left-[-120%] top-0 h-full w-1/2
+                               bg-white/10 blur-md transform transition-transform duration-500
+                               group-hover:translate-x-[260%]"
+                  />
                 </button>
               </div>
             </div>
@@ -902,10 +1126,15 @@ export default function HermesPage() {
                 <button
                   onClick={submitActionNote}
                   disabled={!actionNote.trim()}
-                  className="px-5 py-2.5 rounded-xl text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                  className="group relative overflow-hidden px-5 py-2.5 rounded-xl text-primary-foreground hover:opacity-95 disabled:opacity-50 transition-transform active:scale-[0.98]"
                   style={{ backgroundColor: "var(--color-turquoise)" }}
                 >
                   Continue
+                  <span
+                    className="pointer-events-none absolute left-[-120%] top-0 h-full w-1/2
+                               bg-white/10 blur-md transform transition-transform duration-500
+                               group-hover:translate-x-[260%]"
+                  />
                 </button>
               </div>
             </div>
@@ -915,4 +1144,3 @@ export default function HermesPage() {
     </div>
   );
 }
-
